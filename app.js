@@ -111,6 +111,24 @@
     if (/music\.apple\.com/.test(u)) return { kind: 'Apple Music', url: u, embed: u.replace('music.apple.com', 'embed.music.apple.com') };
     return { kind: 'Link', url: u };
   }
+  function firstUrl(t) { const m = (t || '').match(/https?:\/\/[^\s]+/); return m ? m[0] : ''; }
+  function cleanTitle(t, author) {
+    let x = (t || '').replace(/[\(\[][^\)\]]*(official|video|lyric|audio|clip|music|קליפ|הקליפ|רשמי)[^\)\]]*[\)\]]/gi, '')
+      .replace(/\b(official\s+)?(music\s+)?(lyric\s+)?(video|audio)\b/gi, '').replace(/#\S+/g, '');
+    x = x.split(/\s[|│]\s/)[0];
+    const dash = x.split(/\s[-–—]\s/);
+    let artist = '';
+    if (dash.length > 1) { artist = dash[0].trim(); x = dash.slice(1).join(' - '); }
+    return { title: x.replace(/\s{2,}/g, ' ').trim(), artist: artist || (author || '').replace(/\s*-\s*Topic$/i, '').trim() };
+  }
+  function fetchMeta(url) {
+    const li = linkInfo(url); if (!li.vid) return Promise.reject();
+    const watch = 'https://www.youtube.com/watch?v=' + li.vid;
+    const get = u => Promise.race([fetch(u).then(r => { if (!r.ok) throw 0; return r.json(); }), new Promise((_, rej) => setTimeout(rej, 6000))]);
+    return get('https://www.youtube.com/oembed?format=json&url=' + encodeURIComponent(watch))
+      .catch(() => get('https://noembed.com/embed?url=' + encodeURIComponent(watch)))
+      .then(j => { if (!j || !j.title) throw 0; return j; });
+  }
   function ytSearchUrl(s) { return 'https://www.youtube.com/results?search_query=' + encodeURIComponent((s.title + ' ' + (s.tune || '')).trim()); }
 
   // ---------- icons ----------
@@ -469,6 +487,10 @@
         <button class="btn primary" style="min-height:40px" data-act="save">Save</button>
       </div>
       <div class="scroll"><div class="form">
+        ${e.isNew ? `<div class="pastebox">
+          <button class="btn primary" style="min-height:50px;font-size:16px" data-act="pastelink">Paste a YouTube / YouTube Music link</button>
+          <span class="muted" style="font-size:12px;line-height:1.35" id="pastenote">${e.metaNote ? esc(e.metaNote) : 'In YouTube tap Share → Copy link, then tap here. The title and link fill in by themselves.'}</span>
+        </div>` : ''}
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <label class="field"><span class="lbl">TITLE</span><input class="inp" dir="rtl" data-f="title" value="${esc(s.title)}" placeholder="Song title"></label>
           <label class="field"><span class="lbl">TUNE / COMPOSER</span><input class="inp" dir="rtl" data-f="tune" value="${esc(s.tune)}" placeholder="Optional"></label>
@@ -493,7 +515,7 @@
             ${posIds.map((id, i) => `<button class="posrow" data-act="pos" data-v="${i}"><span class="n">${i + 1}</span><span class="t">${esc(DB.songs[id].title)}</span></button>${e.after === i ? `<div class="posrow new"><span class="n">${i + 2}</span><span class="t">＋ ${esc(s.title || 'This song')} — goes here</span></div>` : ''}`).join('')}
           </div></div>
         <div class="field"><span class="lbl">TRACK LINK</span>
-          <div style="display:flex;gap:6px"><input class="inp" style="font-size:13px" data-f="youtube" value="${esc(s.youtube)}" placeholder="Paste a link"><a class="btn dark small" style="white-space:nowrap" href="${esc(ytSearchUrl(s))}" target="_blank" rel="noopener">Find on YouTube</a></div>
+          <div style="display:flex;gap:6px"><input class="inp" style="font-size:13px" data-f="youtube" value="${esc(s.youtube)}" placeholder="Paste a link"><button class="btn small" data-act="pasteinto">Paste</button><a class="btn dark small" style="white-space:nowrap" href="${esc(ytSearchUrl(s))}" target="_blank" rel="noopener">Find</a></div>
           <span class="note" style="color:${nt[1]}" id="linknote">${li.kind ? '✓ ' + esc(li.kind) + ' — ' : ''}${nt[0]}</span></div>
         <div class="field"><span class="lbl">MY OWN TRACK</span>
           ${(e.trackFile || (s.track && !e.trackRemove)) ? `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid var(--ok);border-radius:6px;background:var(--ok-soft)"><span style="flex:1;min-width:0;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">♪ ${esc(e.trackFile ? e.trackFile.name : s.track)}</span><button class="link" data-act="pickTrack">Replace</button><button class="link" style="color:var(--danger)" data-act="rmTrack">Remove</button></div>` :
@@ -517,6 +539,24 @@
       const loc = locate(id); li = loc.li; si = loc.si; after = loc.i - 1; song = Object.assign({}, DB.songs[id]);
     }
     go('edit', { edit: { isNew, song, li, si, after, delArm: false } });
+  }
+  function applyLink(text) {
+    const url = firstUrl(text) || (text || '').trim(); if (!url) { toast('Nothing to paste — copy a link first'); return; }
+    readForm(); const e = UI.edit; e.song.youtube = url;
+    const li = linkInfo(url);
+    if (!li.vid) { e.metaNote = li.kind ? '✓ ' + li.kind + ' link added' : 'Link added'; render(); return; }
+    e.metaNote = 'Getting the song name…'; render();
+    fetchMeta(url).then(j => {
+      if (UI.edit !== e) return;
+      const c = cleanTitle(j.title, j.author_name);
+      if (!e.song.title) e.song.title = c.title;
+      e.metaNote = '✓ ' + li.kind + ': “' + j.title + '”' + (c.artist ? ' — ' + c.artist : '') + '. Check the title, add the key, then Save.';
+      render();
+    }).catch(() => { if (UI.edit !== e) return; e.metaNote = '✓ Link added. Couldn’t read the name from YouTube — type the title.'; render(); const t = $('[data-f="title"]'); if (t) t.focus(); });
+  }
+  function readClipboard() {
+    if (navigator.clipboard && navigator.clipboard.readText) return navigator.clipboard.readText();
+    return Promise.reject();
   }
   function readForm() {
     const e = UI.edit; $$('[data-f]').forEach(inp => { e.song[inp.dataset.f] = inp.value; });
@@ -799,6 +839,7 @@
     const sq = $('#sq');
     if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.addEventListener('input', () => { UI.search.q = sq.value; $('#sres').innerHTML = searchResults(); }); const sr = $('#sres'); sr.addEventListener('touchstart', () => sq.blur(), { passive: true }); sr.addEventListener('scroll', () => { if (document.activeElement === sq) sq.blur(); }, { passive: true }); }
     const yt = $('[data-f="youtube"]');
+    if (yt) yt.addEventListener('paste', ev2 => { if (!UI.edit || !UI.edit.isNew) return; const t = (ev2.clipboardData || window.clipboardData).getData('text'); if (t) { ev2.preventDefault(); applyLink(t); } });
     if (yt) yt.addEventListener('input', () => { readForm(); const keep = { start: yt.selectionStart }; render(); const n = $('[data-f="youtube"]'); n.focus(); n.setSelectionRange(keep.start, keep.start); });
     const tt = $('[data-f="title"]');
     if (tt) tt.addEventListener('change', () => { readForm(); render(); });
@@ -888,6 +929,8 @@
       case 'known': readForm(); UI.edit.song.known = !UI.edit.song.known; render(); break;
       case 'pos': readForm(); UI.edit.after = +el.dataset.v; render(); break;
       case 'save': saveEdit(); break;
+      case 'pastelink': readClipboard().then(applyLink).catch(() => { toast('Long-press the link box below and tap Paste'); const y = $('[data-f="youtube"]'); if (y) y.focus(); }); break;
+      case 'pasteinto': readClipboard().then(t => { if (UI.edit.isNew) applyLink(t); else { readForm(); UI.edit.song.youtube = firstUrl(t) || t.trim(); render(); } }).catch(() => { toast('Long-press the box and tap Paste'); const y = $('[data-f="youtube"]'); if (y) y.focus(); }); break;
       case 'pickTrack': readForm(); $('#trackfile').click(); break;
       case 'rmTrack': readForm(); UI.edit.trackFile = null; UI.edit.trackRemove = true; render(); break;
       case 'delsong': {
@@ -952,6 +995,8 @@
     if (todays && SET.autoDay !== td && DB.currentEvent !== todays.id) { DB.currentEvent = todays.id; saveDB(); setTimeout(() => toast('Today: ' + todays.title + ' — ★ adds here'), 600); }
     SET.autoDay = td; saveSet();
     UI.view = 'board'; stack.length = 0; render();
+    const q = new URLSearchParams(location.search); const shared = firstUrl((q.get('url') || '') + ' ' + (q.get('text') || '') + ' ' + (q.get('title') || ''));
+    if (shared) { history.replaceState(null, '', location.pathname); startEdit(null); applyLink(shared); }
   }
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.SONG_LIBRARY_SEED) navigator.serviceWorker.register('sw.js').catch(() => {});
   boot();
