@@ -179,7 +179,8 @@
   }
   function colHTML(L, li) {
     const f = UI.sec[li] || null;
-    let html = `<div class="colhead"><span>${esc(L.name)}</span><span style="opacity:.75;font-weight:500">${listTotal(L)}</span></div>`;
+    const fl = UI.sec[li] || null;
+    let html = `<div class="colhead" data-act="colsec" data-li="${li}" style="cursor:pointer"><span style="display:flex;flex-direction:column;line-height:1.15;min-width:0"><span>${esc(L.name)}</span>${fl ? `<small style="font-size:12px;font-weight:700;color:var(--accent)" dir="auto">${fl === '__fav' ? '♡ Favorites' : esc(fl)}</small>` : ''}</span><span style="display:flex;align-items:center;gap:6px;opacity:.8;font-weight:500;font-size:13px">${listTotal(L)} ${I.down}</span></div>`;
     let shown = 0;
     L.sections.forEach(S => {
       if (f && f !== '__fav' && S.name !== f) return;
@@ -205,7 +206,7 @@
     const kf = UI.keyFilter ? `Key: ${UI.keyFilter}${UI.near ? ' ±' : ''}` : 'Key';
     return `<div class="hdr" id="hdr">
       <div class="hrow">
-        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : esc(L.name)}</span><span class="s">${UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›'}</span></button>
+        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : (visCols() > 1 ? 'Song Library' : esc(L.name))}</span><span class="s">${UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : (visCols() > 1 ? 'Lists ' + (UI.idx + 1) + '–' + Math.min(DB.lists.length, UI.idx + visCols()) + ' of ' + DB.lists.length + ' · swipe for more' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›')}</span></button>
         <button class="ibtn${UI.zoom ? ' on' : ''}" data-act="zoom" aria-label="${UI.zoom ? 'Back to one list' : 'See all lists'}">${I.cols(UI.zoom ? (SET.look === 'B' ? 'var(--ink)' : '#F6F1E7') : 'var(--ink)')}</button>
         <button class="ibtn" data-act="search" aria-label="Search">${I.search}</button>
         <button class="btn" style="min-height:40px;padding:0 10px;font-size:14px${UI.keyFilter ? ';background:var(--accent);border-color:var(--accent);color:#fff' : ''}" data-act="keys">${esc(kf)}</button>
@@ -266,7 +267,7 @@
         </div>
         <div class="rtl" style="display:flex;flex-direction:column;gap:4px">
           <span class="songtitle">${esc(s.title)}${s.known ? ' <span style="color:var(--ok);font-size:20px">✓</span>' : ''}</span>
-          <span class="meta"><span class="key${s.key ? '' : ' none'}" style="height:24px;font-size:12px">${esc(s.key || 'No key')}</span>${s.tune ? `<span>${esc(s.tune)}</span>` : ''}${S && S.name ? `<span>· ${esc(S.name)}</span>` : ''}${s.meter ? `<span>· ${esc(s.meter)}</span>` : ''}</span>
+          <span class="meta"><button class="key${s.key ? '' : ' none'} keybtn" data-act="songkey" data-id="${s.id}" aria-label="Key: change it or see other songs in this key">${esc(s.key || '+ Add key')} ▾</button>${s.tune ? `<span>${esc(s.tune)}</span>` : ''}${S && S.name ? `<span>· ${esc(S.name)}</span>` : ''}${s.meter ? `<span>· ${esc(s.meter)}</span>` : ''}</span>
         </div>
         <div class="actrow" style="display:flex;gap:8px">
           <button class="btn ${on ? '' : 'primary'}" style="flex:1${on ? ';background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)' : ''}" data-act="star" data-id="${s.id}" data-re="1">${I.star(on).replace(/var\(--accent\)/g, on ? 'var(--accent)' : '#FFFDF8').replace('#9A8F80', '#FFFDF8')}${on ? 'Added · #' + (ev().ids.indexOf(s.id) + 1) : 'Add to event'}</button>
@@ -278,9 +279,9 @@
         ${li.kind === 'Spotify' ? `<a class="link" style="color:#1F5FBF" href="${esc(li.url)}" target="_blank" rel="noopener">Open in Spotify app ›</a>` : ''}
       </div>
       <div id="playerslot"></div>
-      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `
+      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `<div class="pblock">
         ${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:10px"></div>'}
-        <div class="ltext">${esc(p.lines.join('\n'))}</div>`).join('')}</div>` : `<div class="nolyrics">No lyrics yet. <button class="link" data-act="editsong" data-id="${s.id}">Add lyrics</button></div>`}</div>
+        <div class="ltext">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : `<div class="nolyrics">No lyrics yet. <button class="link" data-act="editsong" data-id="${s.id}">Add lyrics</button></div>`}</div>
       <div class="footnav">
         <button class="navbtn" data-act="nav" data-id="${nav.prev || ''}" ${nav.prev ? '' : 'disabled style="opacity:.35"'}><small>‹ PREVIOUS</small><span>${nav.prev ? esc(DB.songs[nav.prev].title) : '—'}</span></button>
         <button class="navbtn next" data-act="nav" data-id="${nav.next || ''}" ${nav.next ? '' : 'disabled style="opacity:.35"'}><small>${nav.label ? 'NEXT IN EVENT ›' : 'NEXT ›'}</small><span>${nav.next ? esc(DB.songs[nav.next].title) : '—'}</span></button>
@@ -535,7 +536,7 @@
     if (e.isNew) { UI.view = 'board'; UI.idx = e.li; render(); toast('Added to ' + DB.lists[e.li].name); setTimeout(() => scrollToSong(s.id), 50); }
     else { UI.view = 'song'; UI.songId = s.id; render(); toast('Saved'); }
   }
-  function scrollToSong(id) { const el = $(`.col[data-li="${UI.idx}"] .row[data-id="${id}"]`); const b = $('#board'); if (b) b.scrollLeft = UI.idx * b.clientWidth; if (el) { el.scrollIntoView({ block: 'center' }); el.style.background = 'var(--accent-soft)'; setTimeout(() => el.style.background = '', 1500); } }
+  function scrollToSong(id) { const el = $(`.col[data-li="${UI.idx}"] .row[data-id="${id}"]`); const b = $('#board'); if (b) b.scrollLeft = UI.idx * colW(b); if (el) { el.scrollIntoView({ block: 'center' }); el.style.background = 'var(--accent-soft)'; setTimeout(() => el.style.background = '', 1500); } }
 
   // ---------- search ----------
   function searchHTML() {
@@ -617,7 +618,7 @@
       <div class="rtl" style="padding:12px 18px 6px;display:flex;align-items:center;gap:10px;border-bottom:var(--bw) solid var(--ink)">
         <span style="flex:1;font-size:30px;font-weight:800;line-height:1.1">${esc(s.title)}</span>
         <span class="key" style="height:32px;font-size:17px;padding:0 8px">${esc(s.key || '—')}</span></div>
-      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:10px"></div>'}<div class="ltext">${esc(p.lines.join('\n'))}</div>`).join('')}</div>` : `<div class="nolyrics">No lyrics for this song.${s.tune ? ' Tune: ' + esc(s.tune) : ''}</div>`}</div>
+      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `<div class="pblock">${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:10px"></div>'}<div class="ltext">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : `<div class="nolyrics">No lyrics for this song.${s.tune ? ' Tune: ' + esc(s.tune) : ''}</div>`}</div>
       <div class="footnav">
         <button class="ibtn" style="width:64px;height:64px" data-act="gigprev" aria-label="Previous song" ${i ? '' : 'disabled style="width:64px;height:64px;opacity:.3"'}>${I.back}</button>
         <button class="gignext" data-act="gignext" ${nx ? '' : 'disabled'}><span style="font-size:12px;font-weight:800;letter-spacing:1px;opacity:.8">NEXT ›</span><span dir="rtl" style="display:flex;align-items:center;gap:8px"><span style="font-size:18px;font-weight:800">${nx ? esc(nx.title) : 'End of list'}</span>${nx ? `<span style="font-size:13px;font-weight:800;padding:1px 6px;border:1.5px solid currentColor;border-radius:4px;direction:ltr">${esc(nx.key || '—')}</span>` : ''}</span></button>
@@ -655,10 +656,10 @@
   function overlayHTML() {
     const o = UI.overlay; if (!o) return '';
     if (o.type === 'sec') {
-      const L = DB.lists[UI.idx]; const f = UI.sec[UI.idx] || null;
+      const sli = o.li != null ? o.li : UI.idx; const L = DB.lists[sli]; const f = UI.sec[sli] || null;
       const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
       const opts = [{ k: '', n: 'All sections', c: listTotal(L) }, { k: '__fav', n: '♡ Favorites', c: favN }].concat(L.sections.map(S => ({ k: S.name, n: S.name || 'Songs', c: S.ids.length })));
-      return `<div class="scrim top" data-act="close"><div class="menu">${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
+      return `<div class="scrim top" data-act="close"><div class="menu" style="max-width:520px"><div class="mh">SECTIONS · ${esc(L.name).toUpperCase()}</div>${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
     }
     if (o.type === 'lists') {
       return `<div class="scrim top" data-act="close"><div class="menu"><div class="mh">JUMP TO A LIST</div>${DB.lists.map((L, i) => `<button class="opt${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}"><span>${esc(L.name)}</span><small>${listTotal(L)}</small></button>`).join('')}</div></div>`;
@@ -677,11 +678,49 @@
         <button class="btn dark" style="min-height:52px;font-size:16px" data-act="kapply">${sel ? 'Show ' + total + ' songs' : 'Show all songs'}</button></div></div>`;
     }
     if (o.type === 'peek') {
-      const s = DB.songs[o.id]; const lines = previewLines(s.lyrics, 6);
-      return `<div class="scrim" data-act="close" style="justify-content:center;padding:20px"><div class="menu" data-stop="1" style="padding:14px 16px;display:flex;flex-direction:column;gap:8px;margin:0">
-        <div class="rtl" style="display:flex;align-items:center;gap:8px"><b style="flex:1;font-size:20px">${esc(s.title)}</b><span class="key">${esc(s.key || '—')}</span></div>
-        <div class="rtl" style="font-size:18px;line-height:1.5;white-space:pre-line;color:var(--ink)">${esc(lines.join('\n'))}…</div>
-        <div style="display:flex;gap:8px"><button class="btn" style="flex:1" data-act="close">Close</button><button class="btn primary" style="flex:1" data-act="open" data-id="${s.id}">Open song</button></div></div></div>`;
+      const s = DB.songs[o.id]; const parts = parseLyrics(s.lyrics);
+      const loc = locate(s.id); const ids = loc ? DB.lists[loc.li].sections[loc.si].ids : [];
+      const pi = ids.indexOf(s.id); const prev = ids[pi - 1], next = ids[pi + 1];
+      const on = ev().ids.includes(s.id);
+      return `<div class="scrim" data-act="close" style="justify-content:center;align-items:center;padding:16px"><div class="menu peek" data-stop="1">
+        <div class="rtl" style="display:flex;align-items:center;gap:8px;padding:12px 14px 8px;border-bottom:1px solid var(--line2)">
+          <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2"><b style="font-size:20px">${esc(s.title)}</b>${s.tune ? `<small class="muted" style="font-size:13px">${esc(s.tune)}</small>` : ''}</span>
+          <span class="key" style="height:26px;font-size:13px">${esc(s.key || '—')}</span></div>
+        <div class="peekbody" id="peekbody">${parts.length ? `<div class="lyrics" style="padding:0 0 10px">${parts.map(p => `<div class="pblock">${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:6px"></div>'}<div class="ltext" style="font-size:19px">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : '<div class="nolyrics">No lyrics for this song yet.</div>'}</div>
+        <div style="display:flex;gap:6px;padding:10px 12px;border-top:1px solid var(--line2)">
+          <button class="ibtn" data-act="peekgo" data-id="${prev || ''}" aria-label="Previous song" ${prev ? '' : 'disabled style="opacity:.3"'}>${I.back}</button>
+          <button class="ibtn" data-act="peekgo" data-id="${next || ''}" aria-label="Next song" ${next ? '' : 'disabled style="opacity:.3"'}><span style="display:inline-flex;transform:scaleX(-1)">${I.back}</span></button>
+          <button class="ibtn" data-act="star" data-id="${s.id}" data-re="1" aria-label="Add to event">${I.star(on)}</button>
+          <button class="btn" style="flex:1" data-act="close">Close</button>
+          <button class="btn primary" style="flex:1.2" data-act="open" data-id="${s.id}">Full page</button></div>
+      </div></div>`;
+    }
+    if (o.type === 'songkey') {
+      const s = DB.songs[o.id]; const parts = keyParts(s.key); const k = parts[0] || null;
+      const m = k ? k.match(/^([A-G][#b]?)(m?)$/) : null; const root = m ? m[1] : null;
+      const minor = o.minor !== undefined ? o.minor : (m ? !!m[2] : true);
+      const want = k ? [k].concat(o.near ? neighbors(k) : []) : [];
+      const loc = locate(s.id); const L = loc ? DB.lists[loc.li] : null; const S = L ? L.sections[loc.si] : null;
+      const match = id => id !== s.id && keyParts(DB.songs[id].key).some(p => want.includes(p));
+      const inSec = k && S ? S.ids.filter(match) : [];
+      const inList = k && L ? L.sections.filter(x => x !== S).reduce((a, x) => a.concat(x.ids.filter(match)), []) : [];
+      let other = 0; if (k) DB.lists.forEach((LL, i) => { if (!loc || i !== loc.li) LL.sections.forEach(x => other += x.ids.filter(match).length); });
+      const t = ev();
+      const row = id => { const x = DB.songs[id]; return `<div class="srow" style="min-height:42px"><button class="star" style="width:32px;height:40px;border:none;background:none;padding:0;display:flex;align-items:center;justify-content:center" data-act="star" data-id="${id}" data-re="1" aria-label="Add to event">${I.star(t.ids.includes(id))}</button><button class="open" data-act="open" data-id="${id}"><span class="key">${esc(x.key)}</span><span class="two"><b>${esc(x.title)}${x.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(x.tune)}</span>` : ''}</b></span></button></div>`; };
+      return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1" style="max-width:600px;width:100%;margin:0 auto"><span class="grab"></span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b style="font-size:19px">${k ? 'Key · <span style="color:var(--accent)">' + esc(s.key) + '</span>' : 'Add a key'}</b>
+          <div class="seg" style="width:150px"><button class="${!minor ? 'on' : ''}" data-act="skmode" data-v="maj">Major</button><button class="${minor ? 'on' : ''}" data-act="skmode" data-v="min">Minor</button></div></div>
+        <div class="grid6">${ROOTS.map(r => `<button class="kbtn" style="min-height:40px;font-size:14px${root === r && (!!(m && m[2])) === minor ? ';background:var(--accent);border-color:var(--accent);color:#fff' : ''}" data-act="skset" data-v="${r}">${r}${minor ? 'm' : ''}</button>`).join('')}</div>
+        ${k ? `<div style="display:flex;justify-content:space-between;align-items:center"><button class="link" data-act="skclear" style="color:var(--danger)">Remove key</button><span class="muted" style="font-size:12px">Tap a note to change it — saved right away</span></div>` : '<span class="muted" style="font-size:12px">Tap a note — saved right away</span>'}
+        ${k ? `<div style="height:1px;background:var(--line2)"></div>
+        <button class="toggle" style="min-height:44px" data-act="sknear"><span><b>Include neighbouring keys</b><small>${esc(neighbors(k).join(' and '))}</small></span><span class="switch${o.near ? ' on' : ''}"><i></i></span></button>
+        <div style="max-height:38dvh;overflow-y:auto">
+          <div class="shead"><span class="muted">${inSec.length}</span><b dir="auto">ALSO IN ${esc(k)}${o.near ? ' ±' : ''} · ${esc(S && S.name ? S.name : 'THIS SECTION')}</b></div>
+          ${inSec.slice(0, 60).map(row).join('') || '<div class="empty">None in this section</div>'}
+          ${inList.length ? `<div class="shead" style="margin-top:6px"><span class="muted">${inList.length}</span><b>REST OF ${esc(L.name).toUpperCase()}</b></div>${inList.slice(0, 60).map(row).join('')}` : ''}
+        </div>
+        <button class="btn dark" style="min-height:48px" data-act="skboard">Show all ${esc(k)}${o.near ? ' ±' : ''} songs on the Board${other ? ` (+${other} in other lists)` : ''}</button>` : ''}
+      </div></div>`;
     }
     if (o.type === 'events') {
       const { up, past, none } = evSorted();
@@ -724,13 +763,13 @@
   function after() {
     const b = $('#board');
     if (b) {
-      b.scrollLeft = UI.idx * b.clientWidth * (UI.zoom ? 0.46 : 1);
+      b.scrollLeft = UI.idx * colW(b);
       $$('.col', b).forEach(c => { const li = +c.dataset.li; if (UI.scroll[li]) c.scrollTop = UI.scroll[li]; });
       let t;
       b.addEventListener('scroll', () => {
         if (UI.zoom) return;
         clearTimeout(t); t = setTimeout(() => {
-          const i = Math.round(b.scrollLeft / b.clientWidth);
+          const i = Math.round(b.scrollLeft / colW(b));
           if (i !== UI.idx && i >= 0 && i < DB.lists.length) { UI.idx = i; refreshHeader(); $$('.col', b).forEach(c => c.classList.toggle('cur', +c.dataset.li === i)); updateTop(); }
         }, 60);
       }, { passive: true });
@@ -755,6 +794,7 @@
       const cancel = () => { if (lp && lp !== 'fired') clearTimeout(lp); };
       b.addEventListener('touchmove', cancel, { passive: true }); b.addEventListener('touchend', e => { if (lp === 'fired') e.preventDefault(); cancel(); lp = null; });
       updateTop();
+      if (visCols() > 1) refreshHeader();
     }
     const sq = $('#sq');
     if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.addEventListener('input', () => { UI.search.q = sq.value; $('#sres').innerHTML = searchResults(); }); const sr = $('#sres'); sr.addEventListener('touchstart', () => sq.blur(), { passive: true }); sr.addEventListener('scroll', () => { if (document.activeElement === sq) sq.blur(); }, { passive: true }); }
@@ -772,6 +812,8 @@
     });
     if (UI.view === 'gig') keepAwake(true); else keepAwake(false);
   }
+  function visCols() { const b = $('#board'); return b ? Math.max(1, Math.round(b.clientWidth / colW(b))) : 1; }
+  function colW(b) { const c = b && b.querySelector('.col'); return c ? c.offsetWidth : (b ? b.clientWidth : 1); }
   function dist(t) { return Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY); }
   function setZoom(z) { UI.zoom = z; UI.overlay = null; render(); }
   function updateTop() { const btn = $('#totop'); if (!btn) return; btn.classList.toggle('hidden', UI.zoom || !(UI.scroll[UI.idx] > 400)); }
@@ -797,6 +839,13 @@
       case 'opensearch': go('song', { songId: id, ctx: { type: 'search' } }); break;
       case 'opentonight': go('song', { songId: id, ctx: { type: 'tonight' } }); break;
       case 'peek': UI.overlay = { type: 'peek', id }; render(); break;
+      case 'songkey': UI.overlay = { type: 'songkey', id, near: false }; render(); break;
+      case 'skmode': UI.overlay.minor = el.dataset.v === 'min'; { const s2 = DB.songs[UI.overlay.id]; const m2 = (keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)(m?)$/); if (m2) { s2.key = m2[1] + (UI.overlay.minor ? 'm' : ''); saveDB(); } } render(); break;
+      case 'skset': { const s2 = DB.songs[UI.overlay.id]; const cur = (keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)(m?)$/); const minor = UI.overlay.minor !== undefined ? UI.overlay.minor : (cur ? !!cur[2] : true); s2.key = el.dataset.v + (minor ? 'm' : ''); s2.keyAsWritten = s2.keyAsWritten || ''; saveDB(); render(); toast('Key saved: ' + s2.key); break; }
+      case 'skclear': { const s2 = DB.songs[UI.overlay.id]; s2.key = ''; saveDB(); render(); break; }
+      case 'sknear': UI.overlay.near = !UI.overlay.near; render(); break;
+      case 'skboard': { const s2 = DB.songs[UI.overlay.id]; const loc2 = locate(s2.id); UI.keyFilter = keyParts(s2.key)[0]; UI.near = !!UI.overlay.near; UI.overlay = null; stack.length = 0; UI.view = 'board'; if (loc2) { UI.idx = loc2.li; UI.sec[loc2.li] = null; } render(); break; }
+      case 'peekgo': if (!id) break; UI.overlay = { type: 'peek', id }; render(); break;
       case 'back': back(); break;
       case 'nav': if (!id) break; UI.songId = id; render(); break;
       case 'zoom': setZoom(!UI.zoom); break;
@@ -808,7 +857,8 @@
       case 'kapply': { const o = UI.overlay; if (o.key !== undefined) UI.keyFilter = o.key; if (o.near !== undefined) UI.near = o.near; UI.overlay = null; render(); break; }
       case 'add': startEdit(null); break;
       case 'secmenu': UI.overlay = { type: 'sec' }; render(); break;
-      case 'pick-sec': UI.sec[UI.idx] = el.dataset.v || null; UI.scroll[UI.idx] = 0; UI.overlay = null; render(); break;
+      case 'pick-sec': { const sli = UI.overlay.li != null ? UI.overlay.li : UI.idx; UI.sec[sli] = el.dataset.v || null; UI.scroll[sli] = 0; UI.overlay = null; render(); break; }
+      case 'colsec': if (UI.zoom) break; UI.overlay = { type: 'sec', li: +el.dataset.li }; render(); break;
       case 'listmenu': if (UI.zoom) { setZoom(false); break; } UI.overlay = { type: 'lists' }; render(); break;
       case 'golist': UI.idx = +el.dataset.li; UI.overlay = null; UI.zoom = false; render(); break;
       case 'hidectl': SET.hideControls = !SET.hideControls; saveSet(); render(); break;
@@ -887,7 +937,7 @@
     if (a === 'esec') { readForm(); UI.edit.si = +e.target.value; UI.edit.after = DB.lists[UI.edit.li].sections[UI.edit.si].ids.filter(i => i !== UI.edit.song.id).length - 1; render(); }
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && UI.overlay) { UI.overlay = null; render(); } });
-  window.addEventListener('resize', () => { const b = $('#board'); if (b && !UI.zoom) b.scrollLeft = UI.idx * b.clientWidth; layoutGP(); });
+  window.addEventListener('resize', () => { const b = $('#board'); if (b && !UI.zoom) { b.scrollLeft = UI.idx * colW(b); refreshHeader(); } layoutGP(); });
 
   // ---------- boot ----------
   async function boot() {
