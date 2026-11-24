@@ -39,12 +39,30 @@
   }
   function today() { const d = new Date(); return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
 
+  // ---------- own tracks (audio files kept in IndexedDB on this device) ----------
+  const TDB = { db: null };
+  function tdb() {
+    if (TDB.db) return Promise.resolve(TDB.db);
+    return new Promise((res, rej) => { const r = indexedDB.open('songlib-tracks', 1); r.onupgradeneeded = () => r.result.createObjectStore('tracks'); r.onsuccess = () => { TDB.db = r.result; res(r.result); }; r.onerror = () => rej(r.error); });
+  }
+  function trackPut(id, file) { return tdb().then(db => new Promise((res, rej) => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').put({ name: file.name, type: file.type, blob: file }, id); tx.oncomplete = res; tx.onerror = () => rej(tx.error); })); }
+  function trackGet(id) { return tdb().then(db => new Promise((res, rej) => { const r = db.transaction('tracks').objectStore('tracks').get(id); r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error); })); }
+  function trackDel(id) { return tdb().then(db => new Promise(res => { const tx = db.transaction('tracks', 'readwrite'); tx.objectStore('tracks').delete(id); tx.oncomplete = res; tx.onerror = res; })); }
+
   // ---------- helpers ----------
   const $ = (s, el) => (el || document).querySelector(s);
   const $$ = (s, el) => Array.from((el || document).querySelectorAll(s));
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const app = () => $('#app');
   function toast(msg) { const t = document.createElement('div'); t.className = 'toast'; t.textContent = msg; app().appendChild(t); setTimeout(() => t.remove(), 2200); }
+  function evSorted() {
+    const t = today();
+    const up = DB.events.filter(e => e.date && e.date >= t).sort((a, b) => a.date.localeCompare(b.date));
+    const past = DB.events.filter(e => e.date && e.date < t).sort((a, b) => b.date.localeCompare(a.date));
+    const none = DB.events.filter(e => !e.date);
+    return { up, past, none };
+  }
+  function evLabel(e) { return e.title + (e.date ? ' · ' + fmtDate(e.date) : ''); }
   function ev() { return DB.events.find(e => e.id === DB.currentEvent) || DB.events[0]; }
   function locate(id) {
     for (let li = 0; li < DB.lists.length; li++) for (let si = 0; si < DB.lists[li].sections.length; si++) {
@@ -119,8 +137,8 @@
   const UI = { view: 'board', idx: 0, sec: {}, zoom: false, keyFilter: null, near: true, overlay: null, songId: null, ctx: null, edit: null, search: { q: '', scope: 'all' }, reorder: false, clearArm: false, gigI: 0, player: null, scroll: {} };
   const stack = [];
 
-  function go(view, opts) { stopPlayer(); stack.push({ view: UI.view, songId: UI.songId, ctx: UI.ctx, gigI: UI.gigI }); Object.assign(UI, { view, overlay: null }, opts || {}); render(); }
-  function back() { stopPlayer(); UI.queue = false; const p = stack.pop(); if (!p) { UI.view = 'board'; } else Object.assign(UI, p); UI.overlay = null; render(); }
+  function go(view, opts) { stack.push({ view: UI.view, songId: UI.songId, ctx: UI.ctx, gigI: UI.gigI }); Object.assign(UI, { view, overlay: null }, opts || {}); render(); }
+  function back() { const p = stack.pop(); if (!p) { UI.view = 'board'; } else Object.assign(UI, p); UI.overlay = null; render(); }
 
   // ---------- render root ----------
   function render() {
@@ -137,6 +155,7 @@
     else if (v === 'settings') html = settingsHTML();
     app().innerHTML = html + overlayHTML();
     after();
+    layoutGP();
   }
 
   // ---------- board ----------
@@ -153,7 +172,7 @@
       <button class="open" data-act="open" data-id="${s.id}">
         <span class="key${s.key ? '' : ' none'}">${esc(s.key || '—')}</span>
         ${s.meter ? `<span class="meter">${esc(s.meter)}</span>` : ''}
-        <span class="ttl">${s.known ? '<span class="known">✓ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
+        <span class="ttl">${s.track ? '<span class="known" style="color:var(--accent)">♪ </span>' : ''}${s.known ? '<span class="known">✓ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
       </button>
       ${s.lyrics ? `<button class="heart" data-act="peek" data-id="${s.id}" aria-label="Preview lyrics" style="color:var(--muted)">${I.lines}</button>` : '<span style="width:22px;flex:none"></span>'}
     </div>`;
@@ -203,7 +222,7 @@
   }
   function tonightBarHTML() {
     const t = ev(); const last = t.ids.length ? DB.songs[t.ids[t.ids.length - 1]] : null;
-    return `<button class="tonightbar" data-act="tonight" id="tbar"><span class="a"><small>TONIGHT · ${last ? 'LAST ADDED ' + esc(last.title) : 'TAP ★ TO ADD'}</small><span>${esc(t.title)}${t.date ? ' – ' + esc(fmtDate(t.date)) : ''}</span></span><span class="c">${t.ids.length} songs</span></button>`;
+    return `<div class="tonightbar" id="tbar"><button class="a" data-act="tonight"><small>★ ADDING TO${last ? ' · LAST: ' + esc(last.title) : ''}</small><span>${esc(t.title)}${t.date ? ' · ' + esc(fmtDate(t.date)) : ''}</span></button><span class="c" data-act="tonight">${t.ids.length}</span><button class="sw" data-act="evswitch" aria-label="Switch event">${I.down.replace('var(--ink)', 'currentColor')}<small>Switch</small></button></div>`;
   }
   function boardHTML() {
     return `${headerHTML()}
@@ -225,18 +244,18 @@
   // ---------- song ----------
   function navTargets() {
     const id = UI.songId;
-    if (UI.ctx && UI.ctx.type === 'tonight') { const ids = ev().ids; const i = ids.indexOf(id); return { prev: ids[i - 1], next: ids[i + 1], label: 'TONIGHT' }; }
+    if (UI.ctx && UI.ctx.type === 'tonight') { const ids = ev().ids; const i = ids.indexOf(id); if (i >= 0) return { prev: ids[i - 1], next: ids[i + 1], label: 'EVENT' }; }
     const loc = locate(id); if (!loc) return {};
     const ids = DB.lists[loc.li].sections[loc.si].ids; return { prev: ids[loc.i - 1], next: ids[loc.i + 1] };
   }
   function songHTML() {
     const s = DB.songs[UI.songId]; if (!s) return '<div class="empty">Song not found</div>';
     const loc = locate(s.id); const L = loc ? DB.lists[loc.li] : null; const S = loc ? L.sections[loc.si] : null;
-    const backLabel = UI.ctx && UI.ctx.type === 'tonight' ? 'Tonight' : (UI.ctx && UI.ctx.type === 'search' ? 'Search' : (L ? L.name : 'Back'));
+    const backLabel = UI.ctx && UI.ctx.type === 'tonight' ? ev().title : (UI.ctx && UI.ctx.type === 'search' ? 'Search' : (L ? L.name : 'Back'));
     const on = ev().ids.includes(s.id); const fav = DB.favs.includes(s.id);
     const li = linkInfo(s.youtube); const nav = navTargets();
     const parts = parseLyrics(s.lyrics);
-    const canPlay = li.vid || li.embed;
+    const canPlay = s.track || li.vid || li.embed;
     return `<div class="page">
       <div class="songhead">
         <div class="hrow">
@@ -249,10 +268,11 @@
           <span class="songtitle">${esc(s.title)}${s.known ? ' <span style="color:var(--ok);font-size:20px">✓</span>' : ''}</span>
           <span class="meta"><span class="key${s.key ? '' : ' none'}" style="height:24px;font-size:12px">${esc(s.key || 'No key')}</span>${s.tune ? `<span>${esc(s.tune)}</span>` : ''}${S && S.name ? `<span>· ${esc(S.name)}</span>` : ''}${s.meter ? `<span>· ${esc(s.meter)}</span>` : ''}</span>
         </div>
-        <div style="display:flex;gap:8px">
-          <button class="btn ${on ? '' : 'primary'}" style="flex:1${on ? ';background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)' : ''}" data-act="star" data-id="${s.id}" data-re="1">${I.star(on).replace(/var\(--accent\)/g, on ? 'var(--accent)' : '#FFFDF8').replace('#9A8F80', '#FFFDF8')}${on ? 'In tonight · #' + (ev().ids.indexOf(s.id) + 1) : 'Add to tonight'}</button>
-          ${canPlay ? `<button class="btn" style="flex:1" data-act="listen">${I.play('var(--ink)')}Listen</button>` :
-          `<a class="btn" style="flex:1" href="${esc(li.url || ytSearchUrl(s))}" target="_blank" rel="noopener">Find on YouTube</a>`}
+        <div class="actrow" style="display:flex;gap:8px">
+          <button class="btn ${on ? '' : 'primary'}" style="flex:1${on ? ';background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)' : ''}" data-act="star" data-id="${s.id}" data-re="1">${I.star(on).replace(/var\(--accent\)/g, on ? 'var(--accent)' : '#FFFDF8').replace('#9A8F80', '#FFFDF8')}${on ? 'Added · #' + (ev().ids.indexOf(s.id) + 1) : 'Add to event'}</button>
+          <button class="ibtn" data-act="addto" data-id="${s.id}" aria-label="Add to another event">${I.cal.replace('#1F5FBF', 'var(--ink)').replace(/14/g, '18')}</button>
+          ${canPlay ? (GP.songId === s.id ? `<button class="btn" style="flex:1" data-act="gpexpand">${GP.mode === 'mini' ? 'Show player' : 'Playing…'}</button>` : (s.track && li.vid ? `<button class="btn" style="flex:1" data-act="listen" data-src="audio">${I.play('var(--ink)')}My track</button><button class="btn" style="flex:.8" data-act="listen" data-src="yt">YouTube</button>` : `<button class="btn" style="flex:1" data-act="listen">${I.play('var(--ink)')}${s.track ? 'My track' : 'Listen'}</button>`)) :
+          `<a class="btn" style="flex:1" href="${esc(li.url || ytSearchUrl(s))}" target="_blank" rel="noopener">YouTube ↗</a>`}
           <button class="ibtn" data-act="fav" data-id="${s.id}" data-re="1" aria-label="Favorite">${I.heart(fav)}</button>
         </div>
         ${li.kind === 'Spotify' ? `<a class="link" style="color:#1F5FBF" href="${esc(li.url)}" target="_blank" rel="noopener">Open in Spotify app ›</a>` : ''}
@@ -263,13 +283,27 @@
         <div class="ltext">${esc(p.lines.join('\n'))}</div>`).join('')}</div>` : `<div class="nolyrics">No lyrics yet. <button class="link" data-act="editsong" data-id="${s.id}">Add lyrics</button></div>`}</div>
       <div class="footnav">
         <button class="navbtn" data-act="nav" data-id="${nav.prev || ''}" ${nav.prev ? '' : 'disabled style="opacity:.35"'}><small>‹ PREVIOUS</small><span>${nav.prev ? esc(DB.songs[nav.prev].title) : '—'}</span></button>
-        <button class="navbtn next" data-act="nav" data-id="${nav.next || ''}" ${nav.next ? '' : 'disabled style="opacity:.35"'}><small>${nav.label ? 'NEXT IN TONIGHT ›' : 'NEXT ›'}</small><span>${nav.next ? esc(DB.songs[nav.next].title) : '—'}</span></button>
+        <button class="navbtn next" data-act="nav" data-id="${nav.next || ''}" ${nav.next ? '' : 'disabled style="opacity:.35"'}><small>${nav.label ? 'NEXT IN EVENT ›' : 'NEXT ›'}</small><span>${nav.next ? esc(DB.songs[nav.next].title) : '—'}</span></button>
       </div>
     </div>`;
   }
 
-  // ---------- player ----------
+  // ---------- player (one global YouTube player that survives navigation) ----------
   let YTready = null, ytPlayer = null, tick = null;
+  const GP = { songId: null, mode: null, a: null, b: null, speed: 1, lastT: 0, ready: false, src: 'yt', url: null };
+  // one set of controls for both sources: YouTube or your own audio file
+  const P = {
+    au: () => $('#gpa'),
+    ok: () => GP.src === 'audio' ? !!P.au() : !!(ytPlayer && ytPlayer.getCurrentTime),
+    playing: () => GP.src === 'audio' ? (P.au() && !P.au().paused) : (ytPlayer && ytPlayer.getPlayerState && ytPlayer.getPlayerState() === 1),
+    play: () => GP.src === 'audio' ? P.au().play().catch(() => {}) : ytPlayer.playVideo(),
+    pause: () => GP.src === 'audio' ? P.au().pause() : ytPlayer.pauseVideo(),
+    cur: () => GP.src === 'audio' ? (P.au().currentTime || 0) : (ytPlayer.getCurrentTime() || 0),
+    dur: () => GP.src === 'audio' ? (isFinite(P.au().duration) ? P.au().duration : 0) : (ytPlayer.getDuration() || 0),
+    seek: t => { if (GP.src === 'audio') P.au().currentTime = t; else ytPlayer.seekTo(t, true); },
+    rate: r => { if (GP.src === 'audio') { const a = P.au(); a.preservesPitch = true; a.webkitPreservesPitch = true; a.playbackRate = r; } else if (ytPlayer && ytPlayer.setPlaybackRate) ytPlayer.setPlaybackRate(r); }
+  };
+  function songSource(s) { return s.track ? 'audio' : (linkInfo(s.youtube).vid ? 'yt' : null); }
   function loadYT() {
     if (YTready) return YTready;
     YTready = new Promise((res, rej) => {
@@ -280,70 +314,142 @@
     });
     return YTready;
   }
-  function stopPlayer() {
-    if (tick) { clearInterval(tick); tick = null; }
-    if (ytPlayer && ytPlayer.destroy) { try { ytPlayer.destroy(); } catch (e) {} }
-    ytPlayer = null; UI.player = null;
+  function gpEl() {
+    let el = $('#gp'); if (el) return el;
+    el = document.createElement('div'); el.id = 'gp'; el.className = 'gp hidden';
+    el.innerHTML = `
+      <div class="gp-video"><div id="ytp"></div>
+        <div class="gp-cover"><small>MY TRACK</small><b id="gcov" dir="rtl"></b><audio id="gpa" playsinline preload="auto"></audio></div>
+        <button class="gp-min" data-act="gpmin">Minimize</button>
+        <button class="gp-x" data-act="gpclose" aria-label="Close player">✕</button></div>
+      <div class="gp-full">
+        <div class="prog" data-act="seek"><div class="f" id="pf"></div><div class="lp hidden" id="plp"></div></div>
+        <div class="ptimes"><span id="pt">0:00</span><span id="pst"></span><span id="pd">0:00</span></div>
+        <div class="gp-row">
+          <button class="gp-b" data-act="skip" data-d="-10" aria-label="Back 10 seconds">${I.rw.replace(/24/g, '20')}<small>10s</small></button>
+          <button class="gp-play" data-act="pp" aria-label="Play or pause" id="ppbtn"></button>
+          <button class="gp-b" data-act="skip" data-d="10" aria-label="Forward 10 seconds">${I.ff.replace(/24/g, '20')}<small>10s</small></button>
+          <span class="gp-sep"></span>
+          <button class="gp-c" data-act="speedmenu" id="spdbtn">1×</button>
+          <button class="gp-c" data-act="setA" id="ba">A</button>
+          <button class="gp-c" data-act="setB" id="bb">B</button>
+          <button class="gp-c gp-clr" data-act="clearab" aria-label="Clear loop">✕</button>
+        </div>
+        <div class="menu gp-speeds hidden" id="speedmenu">${[0.5, 0.75, 0.9, 1, 1.25].map(v => `<button class="opt" data-act="speed" data-v="${v}">${v}×${v === 1 ? ' normal' : ''}</button>`).join('')}</div>
+      </div>
+      <div class="gp-mini">
+        <button class="gp-mt" data-act="gpexpand"><small id="gmt"></small><b id="gmn" dir="rtl"></b></button>
+        <button class="gp-play sm" data-act="pp" aria-label="Play or pause" id="ppbtn2"></button>
+        <button class="gp-x2" data-act="gpclose" aria-label="Close player">✕</button>
+      </div>`;
+    document.body.appendChild(el);
+    return el;
   }
-  function openPlayer(autoplay) {
-    const s = DB.songs[UI.songId]; const li = linkInfo(s.youtube); const slot = $('#playerslot'); if (!slot) return;
-    UI.player = { a: null, b: null, speed: 1, speedOpen: false, queue: UI.player && UI.player.queue };
-    if (li.vid) {
-      slot.innerHTML = playerHTML(li);
-      loadYT().then(() => {
+  function playSong(id, autoplay, src) {
+    const s = DB.songs[id]; src = src || songSource(s); if (!src) return false;
+    const li = linkInfo(s.youtube); if (src === 'yt' && !li.vid) return false;
+    gpEl(); GP.songId = id; GP.a = GP.b = null; GP.lastT = 0;
+    GP.mode = (UI.view === 'song' && UI.songId === id) ? 'expanded' : 'mini';
+    resetAB();
+    // stop whichever source is not used
+    if (src === 'audio') { if (ytPlayer && ytPlayer.pauseVideo && GP.ready) ytPlayer.pauseVideo(); }
+    else { const a = P.au(); if (a) a.pause(); }
+    GP.src = src;
+    $('#gp').classList.toggle('audio', src === 'audio');
+    if (src === 'audio') {
+      $('#pst').textContent = 'My track'; $('#gcov').textContent = s.title;
+      trackGet(id).then(t => {
+        if (!t) { toast('Track not found on this phone — add it again in Edit'); closePlayer(); return; }
+        const a = P.au(); if (GP.url) URL.revokeObjectURL(GP.url); GP.url = URL.createObjectURL(t.blob);
+        a.src = GP.url; a.onplay = a.onpause = paintPlay; a.onended = () => { paintPlay(); onEnded(); };
+        P.rate(GP.speed); if (autoplay) P.play();
+        if (!tick) tick = setInterval(progress, 250);
+        if ('mediaSession' in navigator) { try { navigator.mediaSession.metadata = new MediaMetadata({ title: s.title, artist: s.tune || 'Song Library' }); } catch (e) {} }
+      }).catch(() => { toast('Could not open the track'); closePlayer(); });
+      layoutGP(); render();
+      return true;
+    }
+    $('#pst').textContent = li.kind;
+    loadYT().then(() => {
+      if (ytPlayer && GP.ready) { autoplay ? ytPlayer.loadVideoById(li.vid) : ytPlayer.cueVideoById(li.vid); ytPlayer.setPlaybackRate(GP.speed); }
+      else if (!ytPlayer) {
         ytPlayer = new YT.Player('ytp', { videoId: li.vid, playerVars: { playsinline: 1, rel: 0, autoplay: autoplay ? 1 : 0 },
           events: {
-            onReady: e => { if (autoplay) e.target.playVideo(); },
-            onStateChange: e => { updateTransport(); if (e.data === 0 && UI.queue) nextInQueue(); }
+            onReady: e => { GP.ready = true; e.target.setPlaybackRate(GP.speed); if (autoplay && GP.src === 'yt') e.target.playVideo(); },
+            onStateChange: e => { paintPlay(); if (e.data === 0) onEnded(); }
           } });
-        tick = setInterval(updateProgress, 250);
-      }).catch(() => { slot.innerHTML = `<div class="player"><div class="note" style="color:var(--danger)">Couldn't reach YouTube — check the connection.</div><a class="btn" href="${esc(li.url)}" target="_blank" rel="noopener">Open in YouTube</a></div>`; });
-    } else if (li.embed) {
-      slot.innerHTML = `<div class="player"><iframe src="${esc(li.embed)}" style="width:100%;height:${li.kind === 'Spotify' ? 152 : 175}px;border:0;border-radius:12px" allow="autoplay *; encrypted-media *; clipboard-write" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation"></iframe>
-        <span class="note muted">${li.kind === 'Spotify' ? 'Inside the app Spotify often plays only a 30-second preview — use "Open in Spotify app" for the full song.' : 'Full song for Apple Music subscribers (sign in inside the player); others hear a preview.'} Speed and loop work with YouTube links.</span>
-        <button class="btn small" data-act="closeplayer">Close player</button></div>`;
-    }
+      }
+      if (!tick) tick = setInterval(progress, 250);
+    }).catch(() => { toast("Couldn't reach YouTube — check the connection"); closePlayer(); });
+    layoutGP(); render();
+    return true;
   }
-  function playerHTML(li) {
-    const p = UI.player;
-    return `<div class="player">
-      <div class="vbox"><div id="ytp"></div></div>
-      <div><div class="prog" data-act="seek" id="prog"><div class="f" id="pf" style="width:0"></div><div class="lp hidden" id="plp"></div></div>
-        <div class="ptimes"><span id="pt">0:00</span><span id="pst">${esc(li.kind)}</span><span id="pd">0:00</span></div></div>
-      <div class="transport">
-        <button class="tbtn" data-act="skip" data-d="-10" aria-label="Back 10 seconds">${I.rw}10s</button>
-        <button class="playbig" data-act="pp" id="ppbtn" aria-label="Play or pause">${I.play('#FFFDF8').replace('16', '26').replace('16', '26')}</button>
-        <button class="tbtn" data-act="skip" data-d="10" aria-label="Forward 10 seconds">${I.ff}10s</button>
-      </div>
-      <div class="practice">
-        <button class="btn" style="flex:1.3;min-height:40px;font-size:13px" data-act="speedmenu">Speed <b id="spd">${p.speed}×</b></button>
-        <button class="ab" data-act="setA" id="ba">Set A</button>
-        <button class="ab" data-act="setB" id="bb">Set B</button>
-        <button class="ibtn" data-act="clearab" aria-label="Clear loop" style="border-color:#C9BEAB">✕</button>
-        <div class="speedmenu hidden" id="speedmenu"><div class="menu" style="margin:0">${[0.5, 0.75, 0.9, 1, 1.25].map(v => `<button class="opt" data-act="speed" data-v="${v}">${v}×${v === 1 ? ' normal' : ''}</button>`).join('')}</div></div>
-      </div>
-      <button class="link" data-act="closeplayer" style="align-self:center">Close player</button>
-    </div>`;
+  function closePlayer() {
+    if (ytPlayer && ytPlayer.stopVideo) { try { ytPlayer.stopVideo(); } catch (e) {} }
+    const a = $('#gpa'); if (a) a.pause();
+    GP.songId = null; GP.mode = null; UI.queue = false; layoutGP(); if (UI.view === 'song') render();
   }
-  function updateProgress() {
-    if (!ytPlayer || !ytPlayer.getCurrentTime) return;
-    const t = ytPlayer.getCurrentTime() || 0, d = ytPlayer.getDuration() || 0, p = UI.player;
-    if (p && p.a != null && p.b != null && t >= p.b) ytPlayer.seekTo(p.a, true);
-    const pf = $('#pf'); if (pf && d) pf.style.width = (t / d * 100) + '%';
-    const pt = $('#pt'); if (pt) pt.textContent = fmtTime(t);
-    const pd = $('#pd'); if (pd) pd.textContent = fmtTime(d);
-    const lp = $('#plp');
-    if (lp && p && d) { if (p.a != null && p.b != null) { lp.classList.remove('hidden'); lp.style.left = (p.a / d * 100) + '%'; lp.style.width = ((p.b - p.a) / d * 100) + '%'; } else lp.classList.add('hidden'); }
-  }
-  function updateTransport() {
-    const b = $('#ppbtn'); if (!b || !ytPlayer || !ytPlayer.getPlayerState) return;
-    b.innerHTML = ytPlayer.getPlayerState() === 1 ? I.pause('#FFFDF8') : I.play('#FFFDF8').replace('16', '26').replace('16', '26');
-  }
-  function nextInQueue() {
-    const ids = ev().ids; let i = ids.indexOf(UI.songId) + 1;
-    while (i < ids.length && !linkInfo(DB.songs[ids[i]].youtube).vid) i++;
+  function onEnded() {
+    if (!UI.queue) return;
+    const ids = ev().ids; let i = ids.indexOf(GP.songId) + 1;
+    while (i < ids.length && !songSource(DB.songs[ids[i]])) i++;
     if (i >= ids.length) { toast('End of Tonight'); UI.queue = false; return; }
-    stopPlayer(); UI.songId = ids[i]; render(); openPlayer(true);
+    const follow = UI.view === 'song' && UI.songId === GP.songId;
+    if (follow) UI.songId = ids[i];
+    playSong(ids[i], true);
+  }
+  function resetAB() { const a = $('#ba'), b = $('#bb'); if (a) { a.textContent = 'A'; a.classList.remove('on'); } if (b) { b.textContent = 'B'; b.classList.remove('on'); } }
+  function paintPlay() {
+    const playing = P.ok() && P.playing();
+    const ic = playing ? I.pause('#FFFDF8') : I.play('#FFFDF8').replace(/16/g, '24');
+    ['#ppbtn', '#ppbtn2'].forEach(k => { const b = $(k); if (b) b.innerHTML = ic; });
+  }
+  function progress() {
+    if (!GP.songId || !P.ok()) return;
+    const t = P.cur(), d = P.dur();
+    if (t > 1) GP.lastT = t;
+    if (GP.a != null && GP.b != null && t >= GP.b) P.seek(GP.a);
+    const pf = $('#pf'); if (pf && d) pf.style.width = (t / d * 100) + '%';
+    $('#pt').textContent = fmtTime(t); $('#pd').textContent = fmtTime(d);
+    const gmt = $('#gmt'); if (gmt) gmt.textContent = fmtTime(t) + ' / ' + fmtTime(d) + (GP.speed !== 1 ? ' · ' + GP.speed + '×' : '') + (GP.a != null && GP.b != null ? ' · loop' : '');
+    const lp = $('#plp');
+    if (lp && d) { if (GP.a != null && GP.b != null) { lp.classList.remove('hidden'); lp.style.left = (GP.a / d * 100) + '%'; lp.style.width = ((GP.b - GP.a) / d * 100) + '%'; } else lp.classList.add('hidden'); }
+  }
+  // place the global player: docked inside the song page, or floating mini bar
+  function layoutGP() {
+    const el = $('#gp'); if (!el) return;
+    document.body.classList.remove('has-gp-exp', 'has-gp-mini');
+    if (!GP.songId) { el.className = 'gp hidden'; return; }
+    const here = UI.view === 'song' && UI.songId === GP.songId;
+    const slot = $('#playerslot');
+    const appR = app().getBoundingClientRect();
+    if (here && GP.mode === 'expanded' && slot) {
+      el.className = 'gp expanded' + (GP.src === 'audio' ? ' audio' : ''); document.body.classList.add('has-gp-exp');
+      el.style.left = (appR.left + 12) + 'px'; el.style.width = (appR.width - 24) + 'px'; el.style.bottom = '';
+      slot.style.height = el.offsetHeight + 16 + 'px';
+      el.style.top = (slot.getBoundingClientRect().top + 8) + 'px';
+    } else {
+      el.className = 'gp mini' + (GP.src === 'audio' ? ' audio' : ''); document.body.classList.add('has-gp-mini');
+      el.style.top = ''; el.style.left = (appR.left + 12) + 'px'; el.style.width = (appR.width - 24) + 'px';
+      const foot = app().querySelector('.tonightbar, .footnav');
+      el.style.bottom = (foot ? (window.innerHeight - foot.getBoundingClientRect().top + 8) : 12) + 'px';
+      const n = $('#gmn'); if (n) n.textContent = DB.songs[GP.songId] ? DB.songs[GP.songId].title : '';
+      if (slot) slot.style.height = '0';
+    }
+    paintPlay();
+  }
+  document.addEventListener('visibilitychange', () => {
+    // iOS can pause/reset the video when you leave the app; pick up where it was
+    if (document.visibilityState === 'visible' && GP.songId && GP.src === 'yt' && P.ok() && GP.lastT > 2 && P.cur() < 1) P.seek(GP.lastT);
+    setTimeout(paintPlay, 300);
+  });
+  // Apple Music / Spotify: small embed inside the song page
+  function openEmbed() {
+    const s = DB.songs[UI.songId]; const li = linkInfo(s.youtube); const slot = $('#playerslot'); if (!slot || !li.embed) return;
+    slot.style.height = '';
+    slot.innerHTML = `<div class="player"><iframe src="${esc(li.embed)}" style="width:100%;height:${li.kind === 'Spotify' ? 152 : 175}px;border:0;border-radius:12px" allow="autoplay *; encrypted-media *; clipboard-write" sandbox="allow-forms allow-popups allow-same-origin allow-scripts allow-storage-access-by-user-activation allow-top-navigation-by-user-activation"></iframe>
+      <span class="note muted">${li.kind === 'Spotify' ? 'Inside the app Spotify often plays only a 30-second preview — use "Open in Spotify app" for the full song.' : 'Full song for Apple Music subscribers (sign in inside the player); others hear a preview.'} Speed and loop work with YouTube links.</span>
+      <button class="btn small" data-act="closeembed">Close player</button></div>`;
   }
 
   // ---------- edit / add ----------
@@ -388,6 +494,11 @@
         <div class="field"><span class="lbl">TRACK LINK</span>
           <div style="display:flex;gap:6px"><input class="inp" style="font-size:13px" data-f="youtube" value="${esc(s.youtube)}" placeholder="Paste a link"><a class="btn dark small" style="white-space:nowrap" href="${esc(ytSearchUrl(s))}" target="_blank" rel="noopener">Find on YouTube</a></div>
           <span class="note" style="color:${nt[1]}" id="linknote">${li.kind ? '✓ ' + esc(li.kind) + ' — ' : ''}${nt[0]}</span></div>
+        <div class="field"><span class="lbl">MY OWN TRACK</span>
+          ${(e.trackFile || (s.track && !e.trackRemove)) ? `<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;border:1.5px solid var(--ok);border-radius:6px;background:var(--ok-soft)"><span style="flex:1;min-width:0;font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">♪ ${esc(e.trackFile ? e.trackFile.name : s.track)}</span><button class="link" data-act="pickTrack">Replace</button><button class="link" style="color:var(--danger)" data-act="rmTrack">Remove</button></div>` :
+          `<button class="btn" data-act="pickTrack">＋ Add my own track (audio file)</button>`}
+          <input type="file" id="trackfile" accept="audio/*,.mp3,.m4a,.wav,.aac,.aif,.aiff" class="hidden">
+          <span class="muted" style="font-size:12px">An MP3, M4A or WAV from your phone (Files, voice memo export, a band rehearsal…). Plays here with speed and loop. Kept on this phone only.</span></div>
         <label class="field"><span class="lbl">LYRICS</span><textarea class="inp" dir="rtl" data-f="lyrics" placeholder="Type or paste the lyrics">${esc(s.lyrics)}</textarea>
           <span class="muted" style="font-size:12px">Write VERSE: or CHORUS: on its own line for a heading, and 2x for a repeat — they turn into labels.</span></label>
         ${e.isNew ? '' : `<button class="btn" style="color:var(--danger);border-color:var(--danger)" data-act="delsong">${e.delArm ? 'Tap again to delete this song' : 'Delete song'}</button>`}
@@ -415,6 +526,8 @@
     s.key = s.key.trim(); const li = linkInfo(s.youtube); s.youtubeIsSearch = li.kind === 'YouTube search';
     if (e.isNew) { s.id = DB.nextId++; }
     else { const loc = locate(s.id); DB.lists[loc.li].sections[loc.si].ids.splice(loc.i, 1); }
+    if (e.trackFile) { s.track = e.trackFile.name; const f = e.trackFile; trackPut(s.id, f).then(() => toast('Track saved')).catch(() => { toast('Could not save the track — phone storage may be full'); delete DB.songs[s.id].track; saveDB(); }); }
+    else if (e.trackRemove && s.track) { delete s.track; trackDel(s.id); }
     DB.songs[s.id] = s;
     const ids = DB.lists[e.li].sections[e.si].ids; const others = ids; others.splice(Math.min(e.after + 1, others.length), 0, s.id);
     saveDB();
@@ -458,7 +571,7 @@
 
   // ---------- tonight ----------
   function tonightHTML() {
-    const t = ev(); const withRec = t.ids.filter(id => linkInfo(DB.songs[id].youtube).vid).length;
+    const t = ev(); const withRec = t.ids.filter(id => songSource(DB.songs[id])).length;
     return `<div class="page">
       <div style="padding:12px 16px;display:flex;flex-direction:column;gap:8px;border-bottom:var(--bw) solid var(--ink)">
         <button class="back" data-act="back">${I.back}Board</button>
@@ -466,7 +579,7 @@
           <span style="display:flex;flex-direction:column;line-height:1.15"><span class="lbl" style="color:var(--accent)">EVENT${t.date ? ' · ' + esc(fmtDate(t.date)).toUpperCase() : ''}</span>
             <span style="font-size:26px;font-weight:800;display:flex;align-items:center;gap:6px">${esc(t.title)}${I.down}</span>
             <span class="muted" style="font-size:13px">${t.ids.length} songs · ${withRec} with recordings</span></span>
-          <span class="muted" style="font-size:12px;font-weight:700">All events</span></button>
+          <span class="muted" style="font-size:12px;font-weight:700">Switch ▾</span></button>
         ${t.calendar ? `<a href="${esc(t.calendar)}" target="_blank" rel="noopener" style="display:flex;align-items:center;gap:5px;font-size:13px;font-weight:700;color:#1F5FBF">${I.cal}Open in Google Calendar</a>` : `<button class="link" style="align-self:flex-start;color:#1F5FBF;text-decoration:none;display:flex;gap:5px;align-items:center" data-act="evdetails">${I.cal}Add date / calendar link</button>`}
         <div style="display:flex;gap:8px">
           <button class="btn primary" style="flex:1.3" data-act="startgig" ${t.ids.length ? '' : 'disabled'}>Start gig</button>
@@ -485,7 +598,7 @@
           <button class="open" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:none;background:none;padding:4px 0;text-align:right" data-act="opentonight" data-id="${id}">
             <span class="key${s.key ? '' : ' none'}">${esc(s.key || '—')}</span>
             <span class="two" style="flex:1;min-width:0;display:flex;flex-direction:column;direction:rtl;line-height:1.2"><b style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</b><small class="muted" style="font-size:12px"><span dir="ltr">${L ? esc(L.name) : ''}</span>${loc && L.sections[loc.si].name ? ' · ' + esc(L.sections[loc.si].name) : ''}</small></span></button>
-          ${UI.reorder ? `<button class="mv" data-act="unstar" data-id="${id}" aria-label="Remove" style="color:var(--danger);border-color:var(--danger)">✕</button>` : ''}</div>`; }).join('') : '<div class="empty">Nothing yet. Tap ★ on any song to add it here.</div>'}</div></div>`;
+          ${UI.reorder ? `<button class="mv" data-act="unstar" data-id="${id}" aria-label="Remove" style="color:var(--danger);border-color:var(--danger)">✕</button>` : ''}</div>`; }).join('') : '<div class="empty">Nothing yet. Tap ★ on any song to add it here — or long-press ★ to pick a different date.</div>'}</div></div>`;
   }
   function tonightText() { const t = ev(); return t.title + (t.date ? ' – ' + fmtDate(t.date) : '') + '\n' + t.ids.map((id, i) => { const s = DB.songs[id]; return (i + 1) + '. ' + s.title + (s.tune ? ' - ' + s.tune : '') + (s.key ? ' (' + s.key + ')' : ''); }).join('\n'); }
 
@@ -526,7 +639,7 @@
         <div style="height:1px;background:var(--line2);margin:4px 0"></div>
         <div class="field"><span class="lbl">LOOK</span><div class="seg"><button class="${SET.look === 'A' ? 'on' : ''}" data-act="look" data-v="A">Look A · Linen</button><button class="${SET.look === 'B' ? 'on' : ''}" data-act="look" data-v="B">Look B · Quiet</button></div></div>
         <div class="field"><span class="lbl">LYRICS SIZE · ${SET.lyricSize}px</span><div class="seg">${[18, 20, 22, 26, 30].map(v => `<button class="${SET.lyricSize === v ? 'on' : ''}" data-act="lsize" data-v="${v}">${v}</button>`).join('')}</div></div>
-        <span class="muted" style="font-size:12px;line-height:1.4">Automatic cloud backup and the same library on two phones (sync) come in a later version.</span>
+        <span class="muted" style="font-size:12px;line-height:1.4">Your own audio tracks stay on this phone and are not inside the backup file. Automatic cloud backup and the same library on two phones (sync) come in a later version.</span>
         <button class="link" style="color:var(--danger);align-self:flex-start" data-act="reset">${UI.resetArm ? 'Tap again — this erases your changes and reloads the original list' : 'Reset to the original song list'}</button>
       </div></div></div>`;
   }
@@ -571,11 +684,30 @@
         <div style="display:flex;gap:8px"><button class="btn" style="flex:1" data-act="close">Close</button><button class="btn primary" style="flex:1" data-act="open" data-id="${s.id}">Open song</button></div></div></div>`;
     }
     if (o.type === 'events') {
-      return `<div class="scrim top" data-act="close"><div class="menu"><div class="mh">EVENTS</div>
-        ${DB.events.slice().reverse().map(e => `<button class="opt${e.id === DB.currentEvent ? ' on' : ''}" data-act="pickev" data-v="${e.id}" style="flex-direction:column;align-items:flex-start;justify-content:center;min-height:50px"><span>${esc(e.title)}${e.date ? ' – ' + esc(fmtDate(e.date)) : ''}</span><small>${e.ids.length} songs${e.id === DB.currentEvent ? ' · open now' : ''}</small></button>`).join('')}
-        <button class="opt" data-act="newev" data-v="empty">+ New empty event</button>
-        <button class="opt" data-act="newev" data-v="copy" style="color:var(--accent)">+ New event, copy these ${ev().ids.length} songs</button>
-        <button class="opt" data-act="evdetails">Rename / date / calendar link…</button></div></div>`;
+      const { up, past, none } = evSorted();
+      const item = e => `<button class="opt${e.id === DB.currentEvent ? ' on' : ''}" data-act="pickev" data-v="${e.id}" style="min-height:52px"><span style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(e.title)}</span><small>${e.date ? esc(fmtDate(e.date)) + (e.date === today() ? ' · today' : '') : 'no date'}</small></span><small>${e.ids.length} songs${e.id === DB.currentEvent ? ' · ★ adding here' : ''}</small></button>`;
+      return `<div class="scrim top" data-act="close"><div class="menu">
+        <button class="opt" data-act="newevsheet" style="color:var(--accent);font-weight:800">＋ New event</button>
+        ${up.length ? `<div class="mh">UPCOMING</div>${up.map(item).join('')}` : ''}
+        ${none.length ? `<div class="mh">NO DATE</div>${none.map(item).join('')}` : ''}
+        ${past.length ? `<div class="mh">PAST</div>${past.map(item).join('')}` : ''}
+        <button class="opt" data-act="evdetails" style="font-weight:500">Rename / change date of “${esc(ev().title)}”…</button></div></div>`;
+    }
+    if (o.type === 'newev') {
+      return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1"><span class="grab"></span><b style="font-size:18px">New event</b>
+        <label class="field"><span class="lbl">NAME</span><input class="inp" id="nevt" placeholder="e.g. Schwartz wedding"></label>
+        <label class="field"><span class="lbl">DATE</span><input class="inp" id="nevd" type="date" value="${today()}"></label>
+        <label class="field"><span class="lbl">START WITH SONGS FROM (OPTIONAL)</span><select class="inp" id="nevc"><option value="">Empty — I'll add songs</option>${DB.events.slice().sort((a, b) => (b.date || '').localeCompare(a.date || '')).map(e => `<option value="${e.id}">${esc(evLabel(e))} (${e.ids.length})</option>`).join('')}</select></label>
+        <button class="btn primary" style="min-height:50px" data-act="createev">Create — ★ will add here</button></div></div>`;
+    }
+    if (o.type === 'addto') {
+      const sid = o.id; const sg = DB.songs[sid]; const { up, past, none } = evSorted();
+      const item = e => { const has = e.ids.includes(sid); return `<button class="opt${has ? ' on' : ''}" data-act="toggleto" data-v="${e.id}" style="min-height:50px"><span style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(e.title)}</span><small>${e.date ? esc(fmtDate(e.date)) : 'no date'} · ${e.ids.length} songs</small></span><span style="font-size:18px;color:var(--accent)">${has ? '★' : '☆'}</span></button>`; };
+      return `<div class="scrim" data-act="close" style="justify-content:center;padding:16px"><div class="menu" data-stop="1" style="margin:0">
+        <div class="mh" style="font-size:13px;letter-spacing:0;color:var(--ink);padding:12px" dir="auto">Add “${esc(sg.title)}” to…</div>
+        ${up.concat(none).map(item).join('')}${past.length ? `<div class="mh">PAST</div>${past.slice(0, 5).map(item).join('')}` : ''}
+        <button class="opt" data-act="newevsheet" style="color:var(--accent)">＋ New event</button>
+        <button class="opt" data-act="close" style="justify-content:center">Done</button></div></div>`;
     }
     if (o.type === 'evdetails') {
       const t = ev();
@@ -611,19 +743,27 @@
       }, { passive: true });
       b.addEventListener('touchend', () => { d0 = null; }, { passive: true });
       b.addEventListener('wheel', e => { if (!e.ctrlKey) return; e.preventDefault(); if (e.deltaY > 3 && !UI.zoom) setZoom(true); else if (e.deltaY < -3 && UI.zoom) setZoom(false); }, { passive: false });
+      // long-press a star -> add to another event
+      let lps = null;
+      b.addEventListener('touchstart', e => { const st = e.target.closest('.star'); if (!st || e.touches.length > 1) return; lps = setTimeout(() => { lps = 'fired'; UI.overlay = { type: 'addto', id: +st.dataset.id }; render(); }, 500); }, { passive: true });
+      b.addEventListener('touchmove', () => { if (lps && lps !== 'fired') clearTimeout(lps); }, { passive: true });
+      b.addEventListener('touchend', e => { if (lps === 'fired') e.preventDefault(); else if (lps) clearTimeout(lps); lps = null; });
+      b.addEventListener('contextmenu', e => { const st = e.target.closest('.star'); if (!st) return; e.preventDefault(); UI.overlay = { type: 'addto', id: +st.dataset.id }; render(); });
       // long-press to preview lyrics
       let lp = null;
-      b.addEventListener('touchstart', e => { const r = e.target.closest('.row'); if (!r || e.touches.length > 1) return; const s = DB.songs[+r.dataset.id]; if (!s || !s.lyrics) return; lp = setTimeout(() => { lp = 'fired'; UI.overlay = { type: 'peek', id: s.id }; render(); }, 550); }, { passive: true });
+      b.addEventListener('touchstart', e => { const r = e.target.closest('.row'); if (!r || e.touches.length > 1 || e.target.closest('.star')) return; const s = DB.songs[+r.dataset.id]; if (!s || !s.lyrics) return; lp = setTimeout(() => { lp = 'fired'; UI.overlay = { type: 'peek', id: s.id }; render(); }, 550); }, { passive: true });
       const cancel = () => { if (lp && lp !== 'fired') clearTimeout(lp); };
       b.addEventListener('touchmove', cancel, { passive: true }); b.addEventListener('touchend', e => { if (lp === 'fired') e.preventDefault(); cancel(); lp = null; });
       updateTop();
     }
     const sq = $('#sq');
-    if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.addEventListener('input', () => { UI.search.q = sq.value; $('#sres').innerHTML = searchResults(); }); }
+    if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.addEventListener('input', () => { UI.search.q = sq.value; $('#sres').innerHTML = searchResults(); }); const sr = $('#sres'); sr.addEventListener('touchstart', () => sq.blur(), { passive: true }); sr.addEventListener('scroll', () => { if (document.activeElement === sq) sq.blur(); }, { passive: true }); }
     const yt = $('[data-f="youtube"]');
     if (yt) yt.addEventListener('input', () => { readForm(); const keep = { start: yt.selectionStart }; render(); const n = $('[data-f="youtube"]'); n.focus(); n.setSelectionRange(keep.start, keep.start); });
     const tt = $('[data-f="title"]');
     if (tt) tt.addEventListener('change', () => { readForm(); render(); });
+    const tf = $('#trackfile');
+    if (tf) tf.addEventListener('change', () => { const f = tf.files[0]; if (!f) return; if (f.size > 60 * 1024 * 1024) { toast('That file is over 60 MB — try a smaller MP3'); return; } readForm(); UI.edit.trackFile = f; UI.edit.trackRemove = false; render(); });
     const rf = $('#restorefile');
     if (rf) rf.addEventListener('change', () => {
       const f = rf.files[0]; if (!f) return; const r = new FileReader();
@@ -649,7 +789,7 @@
         if (i >= 0) t.ids.splice(i, 1); else { t.ids.push(id); }
         saveDB();
         if (el.dataset.re || UI.view !== 'board') { if (UI.view === 'search') { $('#sres').innerHTML = searchResults(); } else render(); } else { refreshRows(id); refreshBar(); }
-        if (i < 0) toast('Added to tonight · #' + t.ids.length);
+        if (i < 0) toast('Added to ' + t.title + ' · #' + t.ids.length);
         break; }
       case 'unstar': { const t = ev(); t.ids = t.ids.filter(x => x !== id); saveDB(); render(); break; }
       case 'fav': { const i = DB.favs.indexOf(id); if (i >= 0) DB.favs.splice(i, 1); else DB.favs.push(id); saveDB(); if (UI.view === 'board') { if (UI.sec[UI.idx] === '__fav') refreshBoardBody(); else { refreshRows(id); refreshHeader(); } } else render(); break; }
@@ -658,7 +798,7 @@
       case 'opentonight': go('song', { songId: id, ctx: { type: 'tonight' } }); break;
       case 'peek': UI.overlay = { type: 'peek', id }; render(); break;
       case 'back': back(); break;
-      case 'nav': if (!id) break; stopPlayer(); UI.songId = id; render(); break;
+      case 'nav': if (!id) break; UI.songId = id; render(); break;
       case 'zoom': setZoom(!UI.zoom); break;
       case 'search': go('search'); break;
       case 'keys': UI.overlay = { type: 'keys' }; render(); break;
@@ -677,16 +817,19 @@
       case 'settings': go('settings'); break;
       case 'size': SET.lyricSize = Math.max(16, Math.min(40, SET.lyricSize + +el.dataset.d)); saveSet(); document.documentElement.style.setProperty('--lyric-size', SET.lyricSize + 'px'); break;
       case 'editsong': startEdit(id); break;
-      case 'listen': openPlayer(true); break;
-      case 'closeplayer': stopPlayer(); $('#playerslot').innerHTML = ''; break;
-      case 'pp': if (ytPlayer && ytPlayer.getPlayerState) { ytPlayer.getPlayerState() === 1 ? ytPlayer.pauseVideo() : ytPlayer.playVideo(); } break;
-      case 'skip': if (ytPlayer && ytPlayer.getCurrentTime) ytPlayer.seekTo(Math.max(0, ytPlayer.getCurrentTime() + +el.dataset.d), true); break;
-      case 'seek': if (ytPlayer && ytPlayer.getDuration) { const r = el.getBoundingClientRect(); ytPlayer.seekTo((e.clientX - r.left) / r.width * ytPlayer.getDuration(), true); } break;
+      case 'listen': { const s = DB.songs[UI.songId]; const src = el.dataset.src || songSource(s); if (src) { UI.queue = false; playSong(UI.songId, true, src); } else openEmbed(); break; }
+      case 'closeembed': { const sl = $('#playerslot'); if (sl) sl.innerHTML = ''; break; }
+      case 'gpmin': GP.mode = 'mini'; layoutGP(); if (UI.view === 'song') render(); break;
+      case 'gpexpand': GP.mode = 'expanded'; if (!(UI.view === 'song' && UI.songId === GP.songId)) go('song', { songId: GP.songId, ctx: UI.queue ? { type: 'tonight' } : { type: 'section' } }); else render(); break;
+      case 'gpclose': closePlayer(); break;
+      case 'pp': if (P.ok()) { P.playing() ? P.pause() : P.play(); setTimeout(paintPlay, 150); } break;
+      case 'skip': if (P.ok()) P.seek(Math.max(0, P.cur() + +el.dataset.d)); break;
+      case 'seek': if (P.ok()) { const r = el.getBoundingClientRect(); P.seek((e.clientX - r.left) / r.width * P.dur()); } break;
       case 'speedmenu': $('#speedmenu').classList.toggle('hidden'); break;
-      case 'speed': { const v = +el.dataset.v; UI.player.speed = v; if (ytPlayer && ytPlayer.setPlaybackRate) ytPlayer.setPlaybackRate(v); $('#spd').textContent = v + '×'; $('#speedmenu').classList.add('hidden'); break; }
-      case 'setA': if (ytPlayer && ytPlayer.getCurrentTime) { const t = ytPlayer.getCurrentTime(); UI.player.a = t; if (UI.player.b != null && UI.player.b <= t) UI.player.b = null; el.textContent = 'A ' + fmtTime(t); el.classList.add('on'); if (UI.player.b == null) { $('#bb').textContent = 'Set B'; $('#bb').classList.remove('on'); } } break;
-      case 'setB': if (ytPlayer && ytPlayer.getCurrentTime) { const t = ytPlayer.getCurrentTime(); if (UI.player.a == null || t <= UI.player.a) { toast('Set A first, then B later in the song'); break; } UI.player.b = t; el.textContent = 'B ' + fmtTime(t); el.classList.add('on'); ytPlayer.seekTo(UI.player.a, true); } break;
-      case 'clearab': if (UI.player) { UI.player.a = UI.player.b = null; $('#ba').textContent = 'Set A'; $('#bb').textContent = 'Set B'; $('#ba').classList.remove('on'); $('#bb').classList.remove('on'); } break;
+      case 'speed': { const v = +el.dataset.v; GP.speed = v; P.rate(v); $('#spdbtn').textContent = v + '×'; $('#spdbtn').classList.toggle('on', v !== 1); $('#speedmenu').classList.add('hidden'); break; }
+      case 'setA': if (P.ok()) { const t = P.cur(); GP.a = t; if (GP.b != null && GP.b <= t) GP.b = null; el.textContent = 'A ' + fmtTime(t); el.classList.add('on'); if (GP.b == null) { $('#bb').textContent = 'B'; $('#bb').classList.remove('on'); } } break;
+      case 'setB': if (P.ok()) { const t = P.cur(); if (GP.a == null || t <= GP.a) { toast('Set A first, then B later in the song'); break; } GP.b = t; el.textContent = 'B ' + fmtTime(t); el.classList.add('on'); P.seek(GP.a); } break;
+      case 'clearab': GP.a = GP.b = null; resetAB(); break;
       // edit
       case 'kmode': { readForm(); const s = UI.edit.song; const m = (s.key || '').match(/^([A-G][#b]?)(m?)$/); const minor = el.dataset.v === 'min'; UI.edit.minor = minor; if (m) s.key = m[1] + (minor ? 'm' : ''); render(); break; }
       case 'kroot': { readForm(); const minor = UI.edit.minor !== undefined ? UI.edit.minor : /m$/.test(UI.edit.song.key || 'm'); UI.edit.song.key = el.dataset.v + (minor ? 'm' : ''); render(); break; }
@@ -695,27 +838,37 @@
       case 'known': readForm(); UI.edit.song.known = !UI.edit.song.known; render(); break;
       case 'pos': readForm(); UI.edit.after = +el.dataset.v; render(); break;
       case 'save': saveEdit(); break;
+      case 'pickTrack': readForm(); $('#trackfile').click(); break;
+      case 'rmTrack': readForm(); UI.edit.trackFile = null; UI.edit.trackRemove = true; render(); break;
       case 'delsong': {
         if (!UI.edit.delArm) { readForm(); UI.edit.delArm = true; render(); break; }
         const sid = UI.edit.song.id; const loc = locate(sid); if (loc) DB.lists[loc.li].sections[loc.si].ids.splice(loc.i, 1);
-        delete DB.songs[sid]; DB.events.forEach(x => x.ids = x.ids.filter(i => i !== sid)); DB.favs = DB.favs.filter(i => i !== sid); saveDB();
+        trackDel(sid); delete DB.songs[sid]; DB.events.forEach(x => x.ids = x.ids.filter(i => i !== sid)); DB.favs = DB.favs.filter(i => i !== sid); saveDB();
         stack.length = 0; UI.view = 'board'; render(); toast('Song deleted'); break; }
       // search
       case 'scope': UI.search.scope = el.dataset.v; render(); break;
       // tonight
-      case 'evmenu': UI.overlay = { type: 'events' }; render(); break;
-      case 'pickev': DB.currentEvent = el.dataset.v; saveDB(); UI.overlay = null; render(); break;
+      case 'evmenu': case 'evswitch': UI.overlay = { type: 'events' }; render(); break;
+      case 'newevsheet': UI.overlay = { type: 'newev', forSong: UI.overlay && UI.overlay.type === 'addto' ? UI.overlay.id : null }; render(); setTimeout(() => { const n = $('#nevt'); if (n) n.focus(); }, 50); break;
+      case 'createev': {
+        const name = $('#nevt').value.trim() || 'New event'; const from = DB.events.find(x => x.id === $('#nevc').value);
+        const n = { id: 'e' + Date.now(), title: name, date: $('#nevd').value, calendar: '', playlist: '', ids: from ? from.ids.slice() : [] };
+        const fs = UI.overlay.forSong; if (fs && !n.ids.includes(fs)) n.ids.push(fs);
+        DB.events.push(n); DB.currentEvent = n.id; saveDB(); UI.overlay = null; render(); toast('★ now adds to ' + n.title); break; }
+      case 'addto': UI.overlay = { type: 'addto', id }; render(); break;
+      case 'toggleto': { const e2 = DB.events.find(x => x.id === el.dataset.v); const sid = UI.overlay.id; const i = e2.ids.indexOf(sid); if (i >= 0) e2.ids.splice(i, 1); else e2.ids.push(sid); saveDB(); render(); break; }
+      case 'pickev': DB.currentEvent = el.dataset.v; saveDB(); UI.overlay = null; render(); toast('★ now adds to ' + ev().title); break;
       case 'newev': { const copy = el.dataset.v === 'copy'; const n = { id: 'e' + Date.now(), title: 'New event', date: today(), calendar: '', playlist: '', ids: copy ? ev().ids.slice() : [] }; DB.events.push(n); DB.currentEvent = n.id; saveDB(); UI.overlay = { type: 'evdetails' }; render(); break; }
       case 'evdetails': UI.overlay = { type: 'evdetails' }; render(); break;
       case 'saveev': { const t = ev(); t.title = $('#evt').value.trim() || t.title; t.date = $('#evd').value; t.calendar = $('#evc').value.trim(); saveDB(); UI.overlay = null; render(); break; }
-      case 'delev': { if (!UI.overlay.delArm) { UI.overlay.delArm = true; render(); break; } if (DB.events.length === 1) { ev().ids = []; ev().title = 'Tonight'; } else { DB.events = DB.events.filter(x => x.id !== DB.currentEvent); DB.currentEvent = DB.events[DB.events.length - 1].id; } saveDB(); UI.overlay = null; render(); break; }
+      case 'delev': { if (!UI.overlay.delArm) { UI.overlay.delArm = true; render(); break; } if (DB.events.length === 1) { ev().ids = []; ev().title = 'My songs'; } else { DB.events = DB.events.filter(x => x.id !== DB.currentEvent); DB.currentEvent = DB.events[DB.events.length - 1].id; } saveDB(); UI.overlay = null; render(); break; }
       case 'reorder': UI.reorder = !UI.reorder; render(); break;
       case 'mv': { const t = ev(); const i = +el.dataset.i, j = i + +el.dataset.d; [t.ids[i], t.ids[j]] = [t.ids[j], t.ids[i]]; saveDB(); render(); break; }
       case 'copylist': { const txt = tonightText(); (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast('Copied — paste it in WhatsApp'), () => { download('tonight.txt', txt, 'text/plain'); }); break; }
       case 'share': { const txt = tonightText(); if (navigator.share) navigator.share({ title: ev().title, text: txt }).catch(() => {}); else navigator.clipboard && navigator.clipboard.writeText(txt).then(() => toast('Copied')); break; }
       case 'clear': if (!UI.clearArm) { UI.clearArm = true; render(); setTimeout(() => { UI.clearArm = false; if (UI.view === 'tonight') render(); }, 4000); break; } ev().ids = []; UI.clearArm = false; saveDB(); render(); break;
       case 'startgig': UI.gigI = 0; go('gig'); break;
-      case 'playall': { const first = ev().ids.find(x => linkInfo(DB.songs[x].youtube).vid); if (!first) break; UI.queue = true; go('song', { songId: first, ctx: { type: 'tonight' } }); openPlayer(true); break; }
+      case 'playall': { const first = ev().ids.find(x => songSource(DB.songs[x])); if (!first) break; go('song', { songId: first, ctx: { type: 'tonight' } }); UI.queue = true; GP.mode = 'expanded'; playSong(first, true); UI.queue = true; break; }
       case 'gignext': UI.gigI++; render(); $('.gig .scroll').scrollTop = 0; break;
       case 'gigprev': UI.gigI = Math.max(0, UI.gigI - 1); render(); break;
       case 'endgig': keepAwake(false); back(); break;
@@ -734,7 +887,7 @@
     if (a === 'esec') { readForm(); UI.edit.si = +e.target.value; UI.edit.after = DB.lists[UI.edit.li].sections[UI.edit.si].ids.filter(i => i !== UI.edit.song.id).length - 1; render(); }
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && UI.overlay) { UI.overlay = null; render(); } });
-  window.addEventListener('resize', () => { const b = $('#board'); if (b && !UI.zoom) b.scrollLeft = UI.idx * b.clientWidth; });
+  window.addEventListener('resize', () => { const b = $('#board'); if (b && !UI.zoom) b.scrollLeft = UI.idx * b.clientWidth; layoutGP(); });
 
   // ---------- boot ----------
   async function boot() {
@@ -745,6 +898,9 @@
       if (!seed) { try { seed = await (await fetch('song-library.json')).json(); } catch (e) { app().innerHTML = '<div class="empty">Could not load the song list.</div>'; return; } }
       DB = fromSeed(seed); saveDB();
     }
+    const td = today(); const todays = DB.events.find(e => e.date === td);
+    if (todays && SET.autoDay !== td && DB.currentEvent !== todays.id) { DB.currentEvent = todays.id; saveDB(); setTimeout(() => toast('Today: ' + todays.title + ' — ★ adds here'), 600); }
+    SET.autoDay = td; saveSet();
     UI.view = 'board'; stack.length = 0; render();
   }
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.SONG_LIBRARY_SEED) navigator.serviceWorker.register('sw.js').catch(() => {});
