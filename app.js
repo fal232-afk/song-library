@@ -84,19 +84,44 @@
   function neighbors(k) { const m = k.match(/^([A-G][#b]?)(m?)$/); const i = ROOTS.indexOf(m[1]); return [ROOTS[(i + 11) % 12] + m[2], ROOTS[(i + 1) % 12] + m[2]]; }
 
   // lyrics
+  // Lyrics format: a heading line (VERSE / Verse: / CHORUS 2 / 2nd part / פזמון:), a repeat line (2x / (x2) / x 2),
+  // blank lines = a small gap between stanzas. Everything else is a lyric line.
+  const LABEL_RE = /^(?:(?:\d+(?:st|nd|rd|th)?|back to|alternative|after|pre)[\s-]*)*(verse|chorus|refrain|bridge|intro|outro|part|ending|coda|tag|interlude|hook|instrumental|solo|break|end|ballad|cantorial|ad[\s-]?lib|nigun|niggun|repeat|chorus|after-chorus|pre-chorus)\b[^\n]{0,18}$/i;
+  const REP_RE = /^\(?\s*(?:x|×)\s*(\d+)\s*\)?$|^\(?\s*(\d+)\s*(?:x|×)\s*\)?$/i;
+  const INLINE_REP = /\s*[\(\[]?\s*(?:(?:x|×)\s*(\d+)|(\d+)\s*(?:x|×))\s*[\)\]]?\s*:?\s*$/i;
+  function labelOf(t) {
+    const raw = t.replace(/\s+/g, ' ').trim();
+    if (raw.length > 30) return null;
+    let rep = '';
+    let body = raw.replace(/:\s*$/, '');
+    const m = body.match(INLINE_REP);
+    const stripRep = () => { if (m && m.index > 0) { rep = (m[1] || m[2]) + 'x'; body = body.slice(0, m.index).replace(/[:\-–\s]+$/, ''); } };
+    if (LABEL_RE.test(body)) { stripRep(); if (LABEL_RE.test(body) || /^[A-Za-z]/.test(body)) return { label: body.toUpperCase(), rep }; }
+    if (/[A-Z]/.test(body) && body === body.toUpperCase() && /^[A-Z0-9][A-Z0-9 .'’#&\-]{0,24}$/.test(body)) return { label: body, rep: '' };
+    if (/:\s*$/.test(raw) && raw.length <= 20 && !/[a-z]{4,}\s+[a-z]{4,}/.test(raw)) return { label: body, rep: '' };
+    return null;
+  }
   function parseLyrics(text) {
     const parts = []; let cur = null;
-    (text || '').split('\n').forEach(raw => {
+    const start = () => { cur = { label: '', rep: '', lines: [] }; parts.push(cur); };
+    (text || '').replace(/\r/g, '').split('\n').forEach(raw => {
       const t = raw.trim();
-      if (!t) return;
-      if (/^\(?\s*(x\s*\d+|\d+\s*x)\s*\)?$/i.test(t)) { if (cur) cur.rep = t.replace(/[()\s]/g, '').toLowerCase().replace(/^x(\d+)$/, '$1x'); else (cur = { label: '', rep: t, lines: [] }, parts.push(cur)); return; }
-      if (/^[A-Z0-9][A-Z0-9 .'’#&\-]{0,24}:?$/.test(t) && /[A-Z]/.test(t)) { cur = { label: t.replace(/:$/, ''), rep: '', lines: [] }; parts.push(cur); return; }
-      if (!cur) { cur = { label: '', rep: '', lines: [] }; parts.push(cur); }
+      if (!t) { if (cur && cur.lines.length && cur.lines[cur.lines.length - 1] !== '') cur.lines.push(''); return; }
+      const r = t.match(REP_RE);
+      if (r) { const n = (r[1] || r[2]) + 'x'; if (cur && (cur.lines.length || cur.label)) { cur.rep = n; } else { start(); cur.rep = n; } return; }
+      const lb = labelOf(t);
+      if (lb) { start(); cur.label = lb.label; cur.rep = lb.rep; return; }
+      if (!cur) start();
       cur.lines.push(t);
     });
+    parts.forEach(p => { while (p.lines.length && p.lines[p.lines.length - 1] === '') p.lines.pop(); });
     return parts.filter(p => p.lines.length || p.label);
   }
-  function previewLines(text, n) { const out = []; parseLyrics(text).forEach(p => p.lines.forEach(l => out.push(l))); return out.slice(0, n); }
+  function lyricsHTML(text, size) {
+    const parts = parseLyrics(text); if (!parts.length) return '';
+    return `<div class="lyrics">${parts.map((p, i) => `<div class="pblock">${p.label || p.rep ? `<div class="part"><span class="pl" dir="auto">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : (i ? '<div class="pgap"></div>' : '')}<div class="ltext"${size ? ` style="font-size:${size}px"` : ''}>${p.lines.map(l => l ? `<div class="ll" dir="auto">${esc(l)}</div>` : '<div class="lgap"></div>').join('')}</div></div>`).join('')}</div>`;
+  }
+  function previewLines(text, n) { const out = []; parseLyrics(text).forEach(p => p.lines.forEach(l => { if (l) out.push(l); })); return out.slice(0, n); }
 
   // links
   function linkInfo(url) {
@@ -171,6 +196,7 @@
     else if (v === 'tonight') html = tonightHTML();
     else if (v === 'gig') html = gigHTML();
     else if (v === 'settings') html = settingsHTML();
+    else if (v === 'lyr') html = lyrEditorHTML();
     app().innerHTML = html + overlayHTML();
     after();
     layoutGP();
@@ -299,9 +325,7 @@
         ${li.kind === 'Spotify' ? `<a class="link" style="color:#1F5FBF" href="${esc(li.url)}" target="_blank" rel="noopener">Open in Spotify app ›</a>` : ''}
       </div>
       <div id="playerslot"></div>
-      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `<div class="pblock">
-        ${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:10px"></div>'}
-        <div class="ltext">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : `<div class="nolyrics">No lyrics yet. <button class="link" data-act="editsong" data-id="${s.id}">Add lyrics</button></div>`}</div>
+      <div class="scroll">${parts.length ? lyricsHTML(s.lyrics) + `<div style="padding:0 20px 30px"><button class="link" data-act="lyredit" data-id="${s.id}">Edit lyrics</button></div>` : `<div class="nolyrics">No lyrics yet. <button class="link" data-act="lyredit" data-id="${s.id}">Add lyrics</button></div>`}</div>
       <div class="footnav">
         <button class="navbtn" data-act="nav" data-id="${nav.prev || ''}" ${nav.prev ? '' : 'disabled style="opacity:.35"'}><small>‹ PREVIOUS</small><span>${nav.prev ? esc(DB.songs[nav.prev].title) : '—'}</span></button>
         <button class="navbtn next" data-act="nav" data-id="${nav.next || ''}" ${nav.next ? '' : 'disabled style="opacity:.35"'}><small>${nav.label ? 'NEXT IN EVENT ›' : 'NEXT ›'}</small><span>${nav.next ? esc(DB.songs[nav.next].title) : '—'}</span></button>
@@ -524,8 +548,8 @@
           `<button class="btn" data-act="pickTrack">＋ Add my own track (audio file)</button>`}
           <input type="file" id="trackfile" accept="audio/*,.mp3,.m4a,.wav,.aac,.aif,.aiff" class="hidden">
           <span class="muted" style="font-size:12px">An MP3, M4A or WAV from your phone (Files, voice memo export, a band rehearsal…). Plays here with speed and loop. Kept on this phone only.</span></div>
-        <label class="field"><span class="lbl">LYRICS</span><textarea class="inp" dir="rtl" data-f="lyrics" placeholder="Type or paste the lyrics">${esc(s.lyrics)}</textarea>
-          <span class="muted" style="font-size:12px">Write VERSE: or CHORUS: on its own line for a heading, and 2x for a repeat — they turn into labels.</span></label>
+        <div class="field"><span class="lbl">LYRICS</span>
+          <button class="lyrcard" data-act="lyredit">${s.lyrics ? `<span class="lyrprev" dir="rtl">${esc(previewLines(s.lyrics, 4).join('\n'))}</span><span class="muted" style="font-size:12px">${s.lyrics.split('\n').filter(x => x.trim()).length} lines · tap to edit full screen</span>` : '<span style="font-weight:700">＋ Add lyrics</span><span class="muted" style="font-size:12px">Opens a full-screen editor with Verse / Chorus / 2x buttons</span>'}</button></div>
         ${e.isNew ? '' : `<button class="btn" style="color:var(--danger);border-color:var(--danger)" data-act="delsong">${e.delArm ? 'Tap again to delete this song' : 'Delete song'}</button>`}
       </div></div></div>`;
   }
@@ -579,6 +603,41 @@
     else { UI.view = 'song'; UI.songId = s.id; render(); toast('Saved'); }
   }
   function scrollToSong(id) { const el = $(`.col[data-li="${UI.idx}"] .row[data-id="${id}"]`); const b = $('#board'); if (b) b.scrollLeft = UI.idx * colW(b); if (el) { el.scrollIntoView({ block: 'center' }); el.style.background = 'var(--accent-soft)'; setTimeout(() => el.style.background = '', 1500); } }
+
+  // ---------- full-screen lyrics editor ----------
+  function lyrEditorHTML() {
+    const L = UI.lyr; const s = DB.songs[L.id] || (UI.edit && UI.edit.song) || {};
+    const tags = [['VERSE', 'Verse'], ['CHORUS', 'Chorus'], ['BRIDGE', 'Bridge'], ['2ND PART', '2nd part'], ['3RD PART', '3rd part'], ['INTRO', 'Intro'], ['OUTRO', 'Outro']];
+    return `<div class="page lyred">
+      <div class="hrow" style="justify-content:space-between;padding:10px 14px;border-bottom:var(--bw) solid var(--ink)">
+        <button class="back" data-act="lyrcancel">Cancel</button>
+        <span style="display:flex;flex-direction:column;align-items:center;line-height:1.15;min-width:0"><b style="font-size:16px">Lyrics</b><small class="muted" dir="auto" style="max-width:180px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title || '')}</small></span>
+        <button class="btn primary" style="min-height:40px" data-act="lyrdone">Done</button>
+      </div>
+      <div style="padding:8px 14px;display:flex;flex-direction:column;gap:8px;border-bottom:1px solid var(--line2)">
+        <div class="seg"><button class="${L.mode === 'write' ? 'on' : ''}" data-act="lyrmode" data-v="write">Write</button><button class="${L.mode === 'preview' ? 'on' : ''}" data-act="lyrmode" data-v="preview">Preview</button></div>
+        ${L.mode === 'write' ? `<div class="lyrtools">${tags.map(t => `<button class="chip" data-act="lyrins" data-v="${t[0]}">+ ${t[1]}</button>`).join('')}<button class="chip" data-act="lyrrep">× 2</button><button class="chip" data-act="lyrgap">↵ Space</button><button class="chip" data-act="lyrpaste">Paste</button><button class="chip" data-act="lyrclean">Tidy up</button></div>` : ''}
+      </div>
+      ${L.mode === 'write' ? `<textarea id="lyrta" class="lyrta" dir="rtl" placeholder="Type or paste the lyrics here.&#10;&#10;Tap + Verse / + Chorus to add a heading where the cursor is, and × 2 for a repeat.">${esc(L.text)}</textarea>` :
+      `<div class="scroll">${lyricsHTML(L.text) || '<div class="nolyrics">Nothing yet — switch to Write.</div>'}</div>`}
+    </div>`;
+  }
+  function openLyr(id, from) {
+    const text = from === 'edit' ? (readForm(), UI.edit.song.lyrics || '') : (DB.songs[id].lyrics || '');
+    go('lyr', { lyr: { id, from, text, orig: text, mode: 'write' } });
+  }
+  function lyrInsert(block) {
+    const ta = $('#lyrta'); if (!ta) return;
+    const v = ta.value, a = ta.selectionStart, b = ta.selectionEnd;
+    const before = v.slice(0, a), after = v.slice(b);
+    const pre = before && !before.endsWith('\n') ? '\n' : '';
+    const post = after && !after.startsWith('\n') ? '\n' : (after ? '' : '\n');
+    const ins = pre + block + post;
+    ta.value = before + ins + after; const c = (before + ins).length; ta.focus(); ta.setSelectionRange(c, c); UI.lyr.text = ta.value;
+  }
+  function tidyLyrics(t) {
+    return parseLyrics(t).map(p => [p.label, ...p.lines.map(l => l), p.rep].filter((x, i, arr) => x !== '' || (i > 0 && i < arr.length - 1)).join('\n')).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+  }
 
   // ---------- search ----------
   function searchHTML() {
@@ -660,7 +719,7 @@
       <div class="rtl" style="padding:12px 18px 6px;display:flex;align-items:center;gap:10px;border-bottom:var(--bw) solid var(--ink)">
         <span style="flex:1;font-size:30px;font-weight:800;line-height:1.1">${esc(s.title)}</span>
         <span class="key" style="height:32px;font-size:17px;padding:0 8px">${esc(s.key || '—')}</span></div>
-      <div class="scroll">${parts.length ? `<div class="lyrics">${parts.map(p => `<div class="pblock">${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:10px"></div>'}<div class="ltext">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : `<div class="nolyrics">No lyrics for this song.${s.tune ? ' Tune: ' + esc(s.tune) : ''}</div>`}</div>
+      <div class="scroll">${parts.length ? lyricsHTML(s.lyrics) : `<div class="nolyrics">No lyrics for this song.${s.tune ? ' Tune: ' + esc(s.tune) : ''}</div>`}</div>
       <div class="footnav">
         <button class="ibtn" style="width:64px;height:64px" data-act="gigprev" aria-label="Previous song" ${i ? '' : 'disabled style="width:64px;height:64px;opacity:.3"'}>${I.back}</button>
         <button class="gignext" data-act="gignext" ${nx ? '' : 'disabled'}><span style="font-size:12px;font-weight:800;letter-spacing:1px;opacity:.8">NEXT ›</span><span dir="rtl" style="display:flex;align-items:center;gap:8px"><span style="font-size:18px;font-weight:800">${nx ? esc(nx.title) : 'End of list'}</span>${nx ? `<span style="font-size:13px;font-weight:800;padding:1px 6px;border:1.5px solid currentColor;border-radius:4px;direction:ltr">${esc(nx.key || '—')}</span>` : ''}</span></button>
@@ -728,7 +787,7 @@
         <div class="rtl" style="display:flex;align-items:center;gap:8px;padding:12px 14px 8px;border-bottom:1px solid var(--line2)">
           <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2"><b style="font-size:20px">${esc(s.title)}</b>${s.tune ? `<small class="muted" style="font-size:13px">${esc(s.tune)}</small>` : ''}</span>
           <span class="key" style="height:26px;font-size:13px">${esc(s.key || '—')}</span></div>
-        <div class="peekbody" id="peekbody">${parts.length ? `<div class="lyrics" style="padding:0 0 10px">${parts.map(p => `<div class="pblock">${p.label || p.rep ? `<div class="part"><span class="pl">${esc(p.label)}</span><span class="ln"></span>${p.rep ? `<span class="rep">${esc(p.rep)}</span>` : ''}</div>` : '<div style="height:6px"></div>'}<div class="ltext" style="font-size:19px">${esc(p.lines.join('\n'))}</div></div>`).join('')}</div>` : '<div class="nolyrics">No lyrics for this song yet.</div>'}</div>
+        <div class="peekbody" id="peekbody">${parts.length ? lyricsHTML(s.lyrics, 19) : '<div class="nolyrics">No lyrics for this song yet.</div>'}</div>
         <div style="display:flex;gap:6px;padding:10px 12px;border-top:1px solid var(--line2)">
           <button class="ibtn" data-act="peekgo" data-id="${prev || ''}" aria-label="Previous song" ${prev ? '' : 'disabled style="opacity:.3"'}>${I.back}</button>
           <button class="ibtn" data-act="peekgo" data-id="${next || ''}" aria-label="Next song" ${next ? '' : 'disabled style="opacity:.3"'}><span style="display:inline-flex;transform:scaleX(-1)">${I.back}</span></button>
@@ -845,6 +904,7 @@
     if (yt) yt.addEventListener('input', () => { readForm(); const keep = { start: yt.selectionStart }; render(); const n = $('[data-f="youtube"]'); n.focus(); n.setSelectionRange(keep.start, keep.start); });
     const tt = $('[data-f="title"]');
     if (tt) tt.addEventListener('change', () => { readForm(); render(); });
+    const lt = $('#lyrta'); if (lt) lt.addEventListener('input', () => { UI.lyr.text = lt.value; UI.lyr.cancelArm = false; });
     const tf = $('#trackfile');
     if (tf) tf.addEventListener('change', () => { const f = tf.files[0]; if (!f) return; if (f.size > 60 * 1024 * 1024) { toast('That file is over 60 MB — try a smaller MP3'); return; } readForm(); UI.edit.trackFile = f; UI.edit.trackRemove = false; render(); });
     const rf = $('#restorefile');
@@ -932,6 +992,18 @@
       case 'known': readForm(); UI.edit.song.known = !UI.edit.song.known; render(); break;
       case 'pos': readForm(); UI.edit.after = +el.dataset.v; render(); break;
       case 'save': saveEdit(); break;
+      case 'lyredit': if (UI.view === 'edit') openLyr(UI.edit.song.id, 'edit'); else openLyr(id, 'song'); break;
+      case 'lyrmode': { const ta = $('#lyrta'); if (ta) UI.lyr.text = ta.value; UI.lyr.mode = el.dataset.v; render(); break; }
+      case 'lyrins': lyrInsert(el.dataset.v); break;
+      case 'lyrrep': lyrInsert('2x'); break;
+      case 'lyrgap': lyrInsert(''); break;
+      case 'lyrpaste': readClipboard().then(t => { if (t) lyrInsert(t.replace(/\r/g, '')); }).catch(() => { toast('Long-press in the text and tap Paste'); const ta = $('#lyrta'); if (ta) ta.focus(); }); break;
+      case 'lyrclean': { const ta = $('#lyrta'); if (!ta) break; UI.lyr.text = tidyLyrics(ta.value); ta.value = UI.lyr.text; toast('Headings, repeats and spacing tidied'); break; }
+      case 'lyrcancel': { const ta = $('#lyrta'); const changed = (ta ? ta.value : UI.lyr.text) !== UI.lyr.orig; if (changed && !UI.lyr.cancelArm) { UI.lyr.cancelArm = true; if (ta) UI.lyr.text = ta.value; toast('Tap Cancel again to throw away the changes'); break; } back(); break; }
+      case 'lyrdone': { const ta = $('#lyrta'); if (ta) UI.lyr.text = ta.value; const L = UI.lyr; const txt = L.text.replace(/\s+$/, '');
+        if (L.from === 'edit') { stack.pop(); UI.view = 'edit'; UI.edit.song.lyrics = txt; render(); }
+        else { DB.songs[L.id].lyrics = txt; saveDB(); back(); toast('Lyrics saved'); }
+        break; }
       case 'pastelink': readClipboard().then(applyLink).catch(() => { toast('Long-press the link box below and tap Paste'); const y = $('[data-f="youtube"]'); if (y) y.focus(); }); break;
       case 'pasteinto': readClipboard().then(t => { if (UI.edit.isNew) applyLink(t); else { readForm(); UI.edit.song.youtube = firstUrl(t) || t.trim(); render(); } }).catch(() => { toast('Long-press the box and tap Paste'); const y = $('[data-f="youtube"]'); if (y) y.focus(); }); break;
       case 'pickTrack': readForm(); $('#trackfile').click(); break;

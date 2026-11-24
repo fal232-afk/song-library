@@ -299,3 +299,23 @@ body.lookB .tonightbar .sw{border-left-color:#DDD}
 .ibtn.knownbtn{border-color:var(--ok)}
 .ibtn.knownbtn.kon{background:var(--ok);border-color:var(--ok)}
 body.lookB .ibtn.knownbtn.kon{background:var(--ok);border-radius:20px}
+
+/* lyrics lines: each line keeps its own direction (Hebrew / English) */
+.ltext .ll{min-height:1.2em}
+.ltext .lgap{height:.7em}
+.pgap{height:.9em}
+.lyrics .part{margin:18px 0 6px}
+.lyrics .pblock:first-child .part{margin-top:12px}
+/* lyrics card in the edit form */
+.lyrcard{display:flex;flex-direction:column;align-items:stretch;gap:6px;width:100%;min-height:64px;padding:12px;border:1.5px solid var(--ink);border-radius:6px;background:var(--card);text-align:right}
+body.lookB .lyrcard{border:1px solid #DDD;border-radius:10px}
+.lyrprev{font-size:16px;font-weight:600;line-height:1.45;white-space:pre-line}
+/* full-screen lyrics editor */
+.lyred{background:var(--bg)}
+.lyrtools{display:flex;gap:6px;overflow-x:auto;scrollbar-width:none;padding-bottom:2px}
+.lyrtools::-webkit-scrollbar{display:none}
+.lyrtools .chip{flex:none;min-height:36px;font-size:13px;border-color:var(--ink)}
+.lyrta{flex:1;min-height:0;width:100%;border:none;outline:none;resize:none;padding:14px 18px 40vh;background:var(--card);font-size:19px;line-height:1.6;font-weight:500;color:var(--ink)}
+/* each line picks its own direction, so English punctuation stays in place */
+.lyrta,.lyrprev{unicode-bidi:plaintext;text-align:right}
+textarea.inp{unicode-bidi:plaintext}
