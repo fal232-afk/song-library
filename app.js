@@ -198,35 +198,37 @@
   function colHTML(L, li) {
     const f = UI.sec[li] || null;
     const fl = UI.sec[li] || null;
-    let html = `<div class="colhead" data-act="colsec" data-li="${li}" style="cursor:pointer"><span style="display:flex;flex-direction:column;line-height:1.15;min-width:0"><span>${esc(L.name)}</span>${fl ? `<small style="font-size:12px;font-weight:700;color:var(--accent)" dir="auto">${fl === '__fav' ? '♡ Favorites' : esc(fl)}</small>` : ''}</span><span style="display:flex;align-items:center;gap:6px;opacity:.8;font-weight:500;font-size:13px">${listTotal(L)} ${I.down}</span></div>`;
+    let html = `<div class="colhead" data-act="colsec" data-li="${li}" style="cursor:pointer"><span style="display:flex;flex-direction:column;line-height:1.15;min-width:0"><span>${esc(L.name)}</span>${fl ? `<small style="font-size:12px;font-weight:700;color:var(--accent)" dir="auto">${fl === '__fav' ? '♡ Favorites' : fl === '__known' ? '✓ Songs I know' : esc(fl)}</small>` : ''}</span><span style="display:flex;align-items:center;gap:6px;opacity:.8;font-weight:500;font-size:13px">${listTotal(L)} ${I.down}</span></div>`;
     let shown = 0;
     L.sections.forEach(S => {
-      if (f && f !== '__fav' && S.name !== f) return;
+      if (f && f !== '__fav' && f !== '__known' && S.name !== f) return;
       let ids = S.ids;
       if (f === '__fav') ids = ids.filter(id => DB.favs.includes(id));
-      const songs = ids.map(id => DB.songs[id]).filter(s => s && matchesKey(s));
-      if (!songs.length && (f === '__fav' || UI.keyFilter)) return;
+      if (f === '__known') ids = ids.filter(id => DB.songs[id] && DB.songs[id].known);
+      const songs = ids.map(id => DB.songs[id]).filter(s => s && matchesKey(s) && (!SET.knownOnly || s.known));
+      if (!songs.length && (f === '__fav' || f === '__known' || UI.keyFilter || SET.knownOnly)) return;
       const known = songs.filter(s => s.known).length;
       if (S.name || L.sections.length > 1) html += `<div class="sechead"><span class="n">${songs.length}${known ? ` · <b>${known} ✓</b>` : ''}</span><span class="nm" dir="auto">${esc(S.name || 'Songs')}</span></div>`;
       html += songs.map(rowHTML).join('');
       if (!songs.length) html += '<div class="empty">No songs yet</div>';
       shown += songs.length;
     });
-    if (!shown && (f || UI.keyFilter)) html += `<div class="empty">${f === '__fav' ? 'No favorites in this list yet — tap ♡ on a song.' : 'No songs match.'}</div>`;
+    if (!shown && (f || UI.keyFilter || SET.knownOnly)) html += `<div class="empty">${f === '__fav' ? 'No favorites in this list yet — tap ♡ on a song.' : f === '__known' ? 'No songs marked ✓ known in this list yet — mark them in Edit.' : (SET.knownOnly ? 'No songs you know in this list yet — mark them ✓ in Edit.' : 'No songs match.')}</div>`;
     return `<div class="col${li === UI.idx ? ' cur' : ''}" data-li="${li}">${html}</div>`;
   }
   function headerHTML() {
     const L = DB.lists[UI.idx]; const f = UI.sec[UI.idx] || null;
     if (SET.hideControls && !UI.zoom) return `<div class="minihdr" id="hdr"><button class="link" style="text-decoration:none;font-size:15px;font-weight:800" data-act="totop">${esc(L.name)}</button><button class="btn small" data-act="hidectl">Show controls</button></div>`;
     const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
-    const secLabel = f === '__fav' ? '♡ Favorites' : (f || 'All sections');
-    const secN = f === '__fav' ? favN : (f ? (L.sections.find(S => S.name === f) || { ids: [] }).ids.length : listTotal(L));
+    const secLabel = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All sections');
+    const secN = f === '__known' ? L.sections.reduce((a, S) => a + S.ids.filter(id => DB.songs[id] && DB.songs[id].known).length, 0) : f === '__fav' ? favN : (f ? (L.sections.find(S => S.name === f) || { ids: [] }).ids.length : listTotal(L));
     const kf = UI.keyFilter ? `Key: ${UI.keyFilter}${UI.near ? ' ±' : ''}` : 'Key';
     return `<div class="hdr" id="hdr">
       <div class="hrow">
-        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : (visCols() > 1 ? 'Song Library' : esc(L.name))}</span><span class="s">${UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : (visCols() > 1 ? 'Lists ' + (UI.idx + 1) + '–' + Math.min(DB.lists.length, UI.idx + visCols()) + ' of ' + DB.lists.length + ' · swipe for more' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›')}</span></button>
+        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : (visCols() > 1 ? 'Song Library' : esc(L.name))}</span><span class="s">${SET.knownOnly && !UI.zoom ? '<b style="color:var(--ok)">✓ Only songs I know</b>' : ''}${SET.knownOnly && !UI.zoom ? '' : UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : (visCols() > 1 ? 'Lists ' + (UI.idx + 1) + '–' + Math.min(DB.lists.length, UI.idx + visCols()) + ' of ' + DB.lists.length + ' · swipe for more' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›')}</span></button>
         <button class="ibtn${UI.zoom ? ' on' : ''}" data-act="zoom" aria-label="${UI.zoom ? 'Back to one list' : 'See all lists'}">${I.cols(UI.zoom ? (SET.look === 'B' ? 'var(--ink)' : '#F6F1E7') : 'var(--ink)')}</button>
         <button class="ibtn" data-act="search" aria-label="Search">${I.search}</button>
+        <button class="ibtn knownbtn${SET.knownOnly ? ' kon' : ''}" data-act="knownonly" aria-label="${SET.knownOnly ? 'Show all songs' : 'Show only songs I know'}" aria-pressed="${SET.knownOnly ? 'true' : 'false'}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${SET.knownOnly ? '#FFFFFF' : 'var(--ok)'}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></button>
         <button class="btn" style="min-height:40px;padding:0 10px;font-size:14px${UI.keyFilter ? ';background:var(--accent);border-color:var(--accent);color:#fff' : ''}" data-act="keys">${esc(kf)}</button>
         <button class="ibtn accent" data-act="add" aria-label="Add a song">${I.plus}</button>
       </div>
@@ -698,7 +700,7 @@
     if (o.type === 'sec') {
       const sli = o.li != null ? o.li : UI.idx; const L = DB.lists[sli]; const f = UI.sec[sli] || null;
       const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
-      const opts = [{ k: '', n: 'All sections', c: listTotal(L) }, { k: '__fav', n: '♡ Favorites', c: favN }].concat(L.sections.map(S => ({ k: S.name, n: S.name || 'Songs', c: S.ids.length })));
+      const opts = [{ k: '', n: 'All sections', c: listTotal(L) }, { k: '__fav', n: '♡ Favorites', c: favN }, { k: '__known', n: '✓ Songs I know', c: L.sections.reduce((a, S) => a + S.ids.filter(id => DB.songs[id] && DB.songs[id].known).length, 0) }].concat(L.sections.map(S => ({ k: S.name, n: S.name || 'Songs', c: S.ids.length })));
       return `<div class="scrim top" data-act="close"><div class="menu" style="max-width:520px"><div class="mh">SECTIONS · ${esc(L.name).toUpperCase()}</div>${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
     }
     if (o.type === 'lists') {
@@ -902,6 +904,7 @@
       case 'colsec': if (UI.zoom) break; UI.overlay = { type: 'sec', li: +el.dataset.li }; render(); break;
       case 'listmenu': if (UI.zoom) { setZoom(false); break; } UI.overlay = { type: 'lists' }; render(); break;
       case 'golist': UI.idx = +el.dataset.li; UI.overlay = null; UI.zoom = false; render(); break;
+      case 'knownonly': SET.knownOnly = !SET.knownOnly; saveSet(); render(); toast(SET.knownOnly ? 'Showing only songs you know ✓' : 'Showing all songs'); break;
       case 'hidectl': SET.hideControls = !SET.hideControls; saveSet(); render(); break;
       case 'totop': { const c = $(`.col[data-li="${UI.idx}"]`); if (c) c.scrollTo({ top: 0, behavior: 'smooth' }); UI.scroll[UI.idx] = 0; break; }
       case 'tonight': go('tonight'); break;
