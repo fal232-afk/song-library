@@ -210,6 +210,7 @@
   // ---------- render root ----------
   function render() {
     document.body.classList.toggle('lookB', SET.look === 'B');
+    ['S', 'L', 'XL'].forEach(z => document.body.classList.toggle('ls-' + z, (SET.listSize || 'M') === z));
     document.documentElement.style.setProperty('--lyric-size', SET.lyricSize + 'px');
     const v = UI.view;
     let html = '';
@@ -291,7 +292,7 @@
       <div class="dotsrow">
         <button class="left" data-act="hidectl">Hide controls</button>
         ${DB.lists.map((x, i) => `<button class="dot${i === UI.idx ? ' on' : ''}${x.custom ? ' mine' : ''}" data-act="golist" data-li="${i}" aria-label="Go to ${esc(x.name)}"></button>`).join('')}<button class="dotplus" data-act="newlist" aria-label="New list">+</button>
-        <button class="right" data-act="settings" style="color:${SET.lastBackup ? 'var(--ok)' : 'var(--danger)'}">${SET.lastBackup ? I.check + 'Backed up' : 'Backup'}</button>
+        <button class="right" data-act="settings" style="color:var(--ink)">Settings${SET.lastBackup ? '' : '<i class="setdot" title="No backup yet"></i>'}</button>
       </div>
       ${UI.zoom ? '<div style="min-height:36px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--muted)">Pinch out or tap a list to open it</div>' :
       `<button class="secbtn" data-act="secmenu"><span style="display:flex;align-items:center;gap:6px">${I.down}<span style="font-size:12px;color:var(--muted)">${secN} songs</span></span><span style="display:flex;align-items:center;gap:6px"><span class="val" dir="auto">${esc(secLabel)}</span></span></button>`}
@@ -808,7 +809,7 @@
   // ---------- settings / backup ----------
   function settingsHTML() {
     const n = Object.keys(DB.songs).length, ly = Object.values(DB.songs).filter(s => s.lyrics).length;
-    return `<div class="page"><div class="hrow" style="padding:10px 16px;border-bottom:var(--bw) solid var(--ink)"><button class="back" data-act="back">${I.back}Board</button><b style="flex:1;text-align:center;margin-right:60px">Backup & settings</b></div>
+    return `<div class="page"><div class="hrow" style="padding:10px 16px;border-bottom:var(--bw) solid var(--ink)"><button class="back" data-act="back">${I.back}Board</button><b style="flex:1;text-align:center;margin-right:60px">Settings</b></div>
       <div class="scroll"><div class="form">
         <div class="card" style="${SET.lastBackup ? '' : 'border-color:var(--danger);background:#FBEAE8'}"><b style="font-size:17px;color:${SET.lastBackup ? 'var(--ok)' : 'var(--danger)'}">${SET.lastBackup ? '✓ Last backup ' + esc(new Date(SET.lastBackup).toLocaleString()) : 'Not backed up yet'}</b>
           <span style="font-size:13px">${n} songs · ${ly} with lyrics · ${DB.lists.length} lists · ${DB.events.length} event${DB.events.length === 1 ? '' : 's'}</span>
@@ -824,6 +825,7 @@
         <input type="file" id="restorefile" accept=".json,application/json" class="hidden">
         <div style="height:1px;background:var(--line2);margin:4px 0"></div>
         <div class="field"><span class="lbl">LOOK</span><div class="seg"><button class="${SET.look === 'A' ? 'on' : ''}" data-act="look" data-v="A">Look A · Linen</button><button class="${SET.look === 'B' ? 'on' : ''}" data-act="look" data-v="B">Look B · Quiet</button></div></div>
+        <div class="field"><span class="lbl">SONG LIST SIZE · BIGGER = FEWER SONGS ON SCREEN</span><div class="seg">${[['S', 'Small'], ['M', 'Normal'], ['L', 'Large'], ['XL', 'X-Large']].map(v => `<button class="${(SET.listSize || 'M') === v[0] ? 'on' : ''}" data-act="listsize" data-v="${v[0]}">${v[1]}</button>`).join('')}</div></div>
         <div class="field"><span class="lbl">LYRICS SIZE · ${SET.lyricSize}px</span><div class="seg">${[18, 20, 22, 26, 30].map(v => `<button class="${SET.lyricSize === v ? 'on' : ''}" data-act="lsize" data-v="${v}">${v}</button>`).join('')}</div></div>
         <span class="muted" style="font-size:12px;line-height:1.4">Your own audio tracks stay on this phone and are not inside the backup file. Automatic cloud backup and the same library on two phones (sync) come in a later version.</span>
         <button class="link" style="color:var(--danger);align-self:flex-start" data-act="reset">${UI.resetArm ? 'Tap again — this erases your changes and reloads the original list' : 'Reset to the original song list'}</button>
@@ -1308,6 +1310,7 @@
       case 'importsongs': $('#importfile').click(); break;
       case 'csv': download('song-library-' + today() + '.csv', csv(), 'text/csv'); break;
       case 'look': SET.look = el.dataset.v; saveSet(); render(); break;
+      case 'listsize': SET.listSize = el.dataset.v; saveSet(); UI.scroll = {}; render(); break;
       case 'lsize': SET.lyricSize = +el.dataset.v; saveSet(); render(); break;
       case 'reset': if (!UI.resetArm) { UI.resetArm = true; render(); break; } UI.resetArm = false; libDel(SET.lib).then(boot); break;
     }

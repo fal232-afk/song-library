@@ -372,3 +372,24 @@ textarea.inp{unicode-bidi:plaintext}
 .board.zoomed .colhead > span:first-child > span{overflow:hidden;text-overflow:ellipsis}
 .board.zoomed .col{padding-top:8px}
 .board.zoomed .sechead{position:sticky;top:33px;z-index:2;background:var(--bg)}
+
+/* song list size (Backup/settings) — affects the Board rows, not the zoomed-out overview */
+body.ls-S .board:not(.zoomed) .row,body.ls-S .board:not(.zoomed) .row .open,body.ls-S .board:not(.zoomed) .row .star,body.ls-S .board:not(.zoomed) .row .heart{height:30px}
+body.ls-S .board:not(.zoomed) .ttl{font-size:14px}
+body.ls-S .board:not(.zoomed) .ttl .tune{font-size:12px}
+body.ls-L .board:not(.zoomed) .row,body.ls-L .board:not(.zoomed) .row .open,body.ls-L .board:not(.zoomed) .row .star,body.ls-L .board:not(.zoomed) .row .heart{height:44px}
+body.ls-L .board:not(.zoomed) .ttl{font-size:18px}
+body.ls-L .board:not(.zoomed) .ttl .tune{font-size:15px}
+body.ls-L .board:not(.zoomed) .key{height:24px;min-width:38px;font-size:13px}
+body.ls-L .board:not(.zoomed) .meter{font-size:12px;line-height:19px}
+body.ls-L .board:not(.zoomed) .sechead .nm{font-size:16px}
+body.ls-L .board:not(.zoomed) .row .star svg,body.ls-L .board:not(.zoomed) .row .heart svg{width:21px;height:21px}
+body.ls-XL .board:not(.zoomed) .row,body.ls-XL .board:not(.zoomed) .row .open,body.ls-XL .board:not(.zoomed) .row .star,body.ls-XL .board:not(.zoomed) .row .heart{height:54px}
+body.ls-XL .board:not(.zoomed) .ttl{font-size:22px}
+body.ls-XL .board:not(.zoomed) .ttl .tune{font-size:17px}
+body.ls-XL .board:not(.zoomed) .key{height:28px;min-width:44px;font-size:15px}
+body.ls-XL .board:not(.zoomed) .meter{font-size:13px;line-height:21px}
+body.ls-XL .board:not(.zoomed) .sechead .nm{font-size:18px}
+body.ls-XL .board:not(.zoomed) .row .star,body.ls-XL .board:not(.zoomed) .row .heart{width:34px}
+body.ls-XL .board:not(.zoomed) .row .star svg,body.ls-XL .board:not(.zoomed) .row .heart svg{width:24px;height:24px}
+.setdot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--danger);margin-left:4px;vertical-align:2px}
