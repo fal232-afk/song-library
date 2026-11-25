@@ -3,11 +3,27 @@
   'use strict';
 
   // ---------- storage ----------
-  const DB_KEY = 'songlib.db.v1', SET_KEY = 'songlib.settings.v1';
+  const LIBS = { joel: { key: 'songlib.db.v1', name: "Joel's library" }, mine: { key: 'songlib.db.mine.v1', name: 'My library' } };
+  const SET_KEY = 'songlib.settings.v1';
   let DB = null;
-  let SET = Object.assign({ look: 'A', lyricSize: 22, hideControls: false, lastBackup: null }, safeJSON(localStorage.getItem(SET_KEY)) || {});
+  let SET = Object.assign({ look: 'A', lyricSize: 22, hideControls: false, lastBackup: null, lib: 'joel' }, safeJSON(localStorage.getItem(SET_KEY)) || {});
   function safeJSON(s) { try { return s ? JSON.parse(s) : null; } catch (e) { return null; } }
-  function saveDB() { try { localStorage.setItem(DB_KEY, JSON.stringify(DB)); } catch (e) { toast('Could not save on this device — download a backup'); } }
+  function dbKey(lib) { return LIBS[lib || SET.lib].key; }
+  // libraries live in IndexedDB (room for thousands of songs + lyrics); old copies in localStorage are moved over once
+  const SDB = { db: null };
+  function sdb() {
+    if (SDB.db) return Promise.resolve(SDB.db);
+    return new Promise((res, rej) => { const r = indexedDB.open('songlib-data', 1); r.onupgradeneeded = () => r.result.createObjectStore('libs'); r.onsuccess = () => { SDB.db = r.result; res(r.result); }; r.onerror = () => rej(r.error); });
+  }
+  function libPut(lib, obj) { return sdb().then(db => new Promise((res, rej) => { const tx = db.transaction('libs', 'readwrite'); tx.objectStore('libs').put(obj, lib); tx.oncomplete = res; tx.onerror = () => rej(tx.error); tx.onabort = () => rej(tx.error); })); }
+  function libGet(lib) {
+    const old = () => safeJSON(localStorage.getItem(dbKey(lib)));
+    return sdb().then(db => new Promise(res => { const r = db.transaction('libs').objectStore('libs').get(lib); r.onsuccess = () => res(r.result || null); r.onerror = () => res(null); }))
+      .then(v => { if (v) return v; const o = old(); if (o) return libPut(lib, o).then(() => { try { localStorage.removeItem(dbKey(lib)); } catch (e) {} return o; }).catch(() => o); return null; })
+      .catch(() => old());
+  }
+  function libDel(lib) { try { localStorage.removeItem(dbKey(lib)); } catch (e) {} return sdb().then(db => new Promise(res => { const tx = db.transaction('libs', 'readwrite'); tx.objectStore('libs').delete(lib); tx.oncomplete = res; tx.onerror = res; })).catch(() => {}); }
+  function saveDB() { const lib = SET.lib; libPut(lib, DB).catch(() => { try { localStorage.setItem(dbKey(lib), JSON.stringify(DB)); } catch (e) { toast('Could not save on this device — download a backup'); } }); }
   function saveSet() { try { localStorage.setItem(SET_KEY, JSON.stringify(SET)); } catch (e) {} }
 
   function fromSeed(seed) {
@@ -81,6 +97,14 @@
     if (!k) return [];
     return k.split('/').map(p => p.trim()).filter(Boolean).map(p => { const m = p.match(/^([A-G][#b]?)(m?)$/); if (!m) return null; return (ALIAS[m[1]] || m[1]) + m[2]; }).filter(Boolean);
   }
+  // Freygish pair: a major key + the minor key a 5th below it (E/Am, D/Gm, C/Fm) — part A freygish, part B minor
+  function freygish(k) {
+    const p = keyParts(k); if (p.length !== 2) return null;
+    const maj = p.find(x => !/m$/.test(x)), min = p.find(x => /m$/.test(x)); if (!maj || !min) return null;
+    return (ROOTS.indexOf(maj) - ROOTS.indexOf(min.slice(0, -1)) + 12) % 12 === 7 ? { a: maj, b: min } : null;
+  }
+  // how a key is shown: freygish pairs as Joe writes them — the major root with a small "fre" (E/Am → E fre)
+  function keyHTML(k, empty) { if (!k) return esc(empty == null ? '—' : empty); const f = freygish(k); return f ? esc(f.a) + '<small class="fre">fre</small>' : esc(k); }
   function neighbors(k) { const m = k.match(/^([A-G][#b]?)(m?)$/); const i = ROOTS.indexOf(m[1]); return [ROOTS[(i + 11) % 12] + m[2], ROOTS[(i + 1) % 12] + m[2]]; }
 
   // lyrics
@@ -177,7 +201,7 @@
   };
 
   // ---------- UI state ----------
-  const UI = { view: 'board', idx: 0, sec: {}, zoom: false, keyFilter: null, near: true, overlay: null, songId: null, ctx: null, edit: null, search: { q: '', scope: 'all' }, reorder: false, clearArm: false, gigI: 0, player: null, scroll: {} };
+  const UI = { view: 'board', idx: 0, sec: {}, zoom: false, keyFilter: null, near: true, overlay: null, songId: null, ctx: null, edit: null, search: { q: '', scope: 'all' }, dbv: { tab: 'off', q: '' }, reorder: false, clearArm: false, gigI: 0, player: null, scroll: {} };
   const stack = [];
 
   function go(view, opts) { stack.push({ view: UI.view, songId: UI.songId, ctx: UI.ctx, gigI: UI.gigI }); Object.assign(UI, { view, overlay: null }, opts || {}); render(); }
@@ -197,6 +221,7 @@
     else if (v === 'gig') html = gigHTML();
     else if (v === 'settings') html = settingsHTML();
     else if (v === 'lyr') html = lyrEditorHTML();
+    else if (v === 'db') html = dbHTML();
     app().innerHTML = html + overlayHTML();
     after();
     layoutGP();
@@ -205,18 +230,19 @@
   // ---------- board ----------
   function matchesKey(s) {
     if (!UI.keyFilter) return true;
+    if (/fre$/.test(UI.keyFilter)) { const f = freygish(s.key); return !!f && f.a === UI.keyFilter.slice(0, -3); }
     const parts = keyParts(s.key); const want = [UI.keyFilter].concat(UI.near ? neighbors(UI.keyFilter) : []);
     return parts.some(p => want.includes(p));
   }
-  function rowHTML(s) {
+  function rowHTML(s, li, si) {
     const t = ev(); const on = t.ids.includes(s.id); const fav = DB.favs.includes(s.id);
-    return `<div class="row" data-id="${s.id}">
+    return `<div class="row" data-id="${s.id}"${li != null ? ` data-li="${li}" data-si="${si}"` : ''}>
       <button class="star" data-act="star" data-id="${s.id}" aria-label="Add to tonight">${I.star(on)}</button>
-      <button class="heart" data-act="fav" data-id="${s.id}" aria-label="Favorite">${I.heart(fav)}</button>
+      <button class="heart kn${s.known ? ' on' : ''}" data-act="knowntog" data-id="${s.id}" aria-label="${s.known ? 'I know it (tap to unmark)' : 'Mark: I know it'}" aria-pressed="${s.known ? 'true' : 'false'}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="${s.known ? 3.2 : 2}" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></button>
       <button class="open" data-act="open" data-id="${s.id}">
-        <span class="key${s.key ? '' : ' none'}">${esc(s.key || '—')}</span>
+        <span class="key rk${s.key ? '' : ' none'}" data-act="rowkey" data-id="${s.id}" role="button" aria-label="Change key">${keyHTML(s.key)}</span>
         ${s.meter ? `<span class="meter">${esc(s.meter)}</span>` : ''}
-        <span class="ttl">${s.track ? '<span class="known" style="color:var(--accent)">♪ </span>' : ''}${s.known ? '<span class="known">✓ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
+        <span class="ttl">${s.track ? '<span class="known" style="color:var(--accent)">♪ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
       </button>
       ${s.lyrics ? `<button class="heart" data-act="peek" data-id="${s.id}" aria-label="Preview lyrics" style="color:var(--muted)">${I.lines}</button>` : '<span style="width:22px;flex:none"></span>'}
     </div>`;
@@ -226,7 +252,7 @@
     const fl = UI.sec[li] || null;
     let html = `<div class="colhead" data-act="colsec" data-li="${li}" style="cursor:pointer"><span style="display:flex;flex-direction:column;line-height:1.15;min-width:0"><span>${esc(L.name)}</span>${fl ? `<small style="font-size:12px;font-weight:700;color:var(--accent)" dir="auto">${fl === '__fav' ? '♡ Favorites' : fl === '__known' ? '✓ Songs I know' : esc(fl)}</small>` : ''}</span><span style="display:flex;align-items:center;gap:6px;opacity:.8;font-weight:500;font-size:13px">${listTotal(L)} ${I.down}</span></div>`;
     let shown = 0;
-    L.sections.forEach(S => {
+    L.sections.forEach((S, si) => {
       if (f && f !== '__fav' && f !== '__known' && S.name !== f) return;
       let ids = S.ids;
       if (f === '__fav') ids = ids.filter(id => DB.favs.includes(id));
@@ -235,23 +261,25 @@
       if (!songs.length && (f === '__fav' || f === '__known' || UI.keyFilter || SET.knownOnly)) return;
       const known = songs.filter(s => s.known).length;
       if (S.name || L.sections.length > 1) html += `<div class="sechead"><span class="n">${songs.length}${known ? ` · <b>${known} ✓</b>` : ''}</span><span class="nm" dir="auto">${esc(S.name || 'Songs')}</span></div>`;
-      html += songs.map(rowHTML).join('');
+      html += songs.map(s => rowHTML(s, li, si)).join('');
       if (!songs.length) html += '<div class="empty">No songs yet</div>';
       shown += songs.length;
     });
-    if (!shown && (f || UI.keyFilter || SET.knownOnly)) html += `<div class="empty">${f === '__fav' ? 'No favorites in this list yet — tap ♡ on a song.' : f === '__known' ? 'No songs marked ✓ known in this list yet — mark them in Edit.' : (SET.knownOnly ? 'No songs you know in this list yet — mark them ✓ in Edit.' : 'No songs match.')}</div>`;
+    if (!listTotal(L)) html += `<div class="empty">No songs here yet.<br>Tap + to add one, or <button class="link" data-act="settings">import songs</button>.</div>`;
+    else if (!shown && (f || UI.keyFilter || SET.knownOnly)) html += `<div class="empty">${f === '__fav' ? 'No favorites in this list yet — tap ♡ on a song.' : f === '__known' ? 'No songs marked ✓ known in this list yet — mark them in Edit.' : (SET.knownOnly ? 'No songs you know in this list yet — mark them ✓ in Edit.' : 'No songs match.')}</div>`;
     return `<div class="col${li === UI.idx ? ' cur' : ''}" data-li="${li}">${html}</div>`;
   }
   function headerHTML() {
     const L = DB.lists[UI.idx]; const f = UI.sec[UI.idx] || null;
-    if (SET.hideControls && !UI.zoom) return `<div class="minihdr" id="hdr"><button class="link" style="text-decoration:none;font-size:15px;font-weight:800" data-act="totop">${esc(L.name)}</button><button class="btn small" data-act="hidectl">Show controls</button></div>`;
+    if (SET.hideControls && !UI.zoom) { const fl = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All sections');
+      return `<div class="minihdr" id="hdr"><button class="link" style="text-decoration:none;font-size:15px;font-weight:800;flex:none;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-act="totop">${esc(L.name)}</button><button class="minisec" data-act="secmenu"><span dir="auto">${esc(fl)}</span>${I.down}</button><button class="btn small" data-act="hidectl">Show controls</button></div>`; }
     const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
     const secLabel = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All sections');
     const secN = f === '__known' ? L.sections.reduce((a, S) => a + S.ids.filter(id => DB.songs[id] && DB.songs[id].known).length, 0) : f === '__fav' ? favN : (f ? (L.sections.find(S => S.name === f) || { ids: [] }).ids.length : listTotal(L));
-    const kf = UI.keyFilter ? `Key: ${UI.keyFilter}${UI.near ? ' ±' : ''}` : 'Key';
+    const kf = UI.keyFilter ? `Key: ${/fre$/.test(UI.keyFilter) ? UI.keyFilter.slice(0, -3) + ' fre' : UI.keyFilter}${UI.near && !/fre$/.test(UI.keyFilter) ? ' ±' : ''}` : 'Key';
     return `<div class="hdr" id="hdr">
       <div class="hrow">
-        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : (visCols() > 1 ? 'Song Library' : esc(L.name))}</span><span class="s">${SET.knownOnly && !UI.zoom ? '<b style="color:var(--ok)">✓ Only songs I know</b>' : ''}${SET.knownOnly && !UI.zoom ? '' : UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : (visCols() > 1 ? 'Lists ' + (UI.idx + 1) + '–' + Math.min(DB.lists.length, UI.idx + visCols()) + ' of ' + DB.lists.length + ' · swipe for more' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›')}</span></button>
+        <button class="title-btn" data-act="listmenu"><span class="t">${UI.zoom ? 'All lists' : (visCols() > 1 ? 'Song Library' : esc(L.name))}</span><span class="s">${SET.lib === 'mine' ? '<b style="color:var(--accent)">My library · </b>' : ''}${SET.knownOnly && !UI.zoom ? '<b style="color:var(--ok)">✓ Only songs I know</b>' : ''}${SET.knownOnly && !UI.zoom ? '' : UI.zoom ? Object.keys(DB.songs).length + ' songs in ' + DB.lists.length + ' lists' : (visCols() > 1 ? 'Lists ' + (UI.idx + 1) + '–' + Math.min(DB.lists.length, UI.idx + visCols()) + ' of ' + DB.lists.length + ' · swipe for more' : listTotal(L) + ' songs · ' + (UI.idx + 1) + ' of ' + DB.lists.length + ' · swipe ‹ ›')}</span></button>
         <button class="ibtn${UI.zoom ? ' on' : ''}" data-act="zoom" aria-label="${UI.zoom ? 'Back to one list' : 'See all lists'}">${I.cols(UI.zoom ? (SET.look === 'B' ? 'var(--ink)' : '#F6F1E7') : 'var(--ink)')}</button>
         <button class="ibtn" data-act="search" aria-label="Search">${I.search}</button>
         <button class="ibtn knownbtn${SET.knownOnly ? ' kon' : ''}" data-act="knownonly" aria-label="${SET.knownOnly ? 'Show all songs' : 'Show only songs I know'}" aria-pressed="${SET.knownOnly ? 'true' : 'false'}"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="${SET.knownOnly ? '#FFFFFF' : 'var(--ok)'}" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12l5 5L20 7"/></svg></button>
@@ -279,7 +307,7 @@
   }
   function refreshHeader() { const h = $('#hdr'); if (h) h.outerHTML = headerHTML(); }
   function refreshBar() { const b = $('#tbar'); if (b) b.outerHTML = tonightBarHTML(); }
-  function refreshRows(id) { $$(`.row[data-id="${id}"]`).forEach(r => { r.outerHTML = rowHTML(DB.songs[id]); }); }
+  function refreshRows(id) { $$(`.row[data-id="${id}"]`).forEach(r => { r.outerHTML = rowHTML(DB.songs[id], r.dataset.li, r.dataset.si); }); }
   function refreshBoardBody() {
     const b = $('#board'); if (!b) return render();
     const left = b.scrollLeft; const tops = $$('.col', b).map(c => c.scrollTop);
@@ -289,16 +317,22 @@
   }
 
   // ---------- song ----------
+  // where the song was opened from (a song can sit in several sections)
+  function curPlace(id) {
+    const c = UI.ctx; if (c && c.type === 'section' && c.li != null && DB.lists[c.li] && DB.lists[c.li].sections[c.si] && DB.lists[c.li].sections[c.si].ids.includes(id)) return { li: c.li, si: c.si, i: DB.lists[c.li].sections[c.si].ids.indexOf(id) };
+    return locate(id);
+  }
   function navTargets() {
     const id = UI.songId;
     if (UI.ctx && UI.ctx.type === 'tonight') { const ids = ev().ids; const i = ids.indexOf(id); if (i >= 0) return { prev: ids[i - 1], next: ids[i + 1], label: 'EVENT' }; }
-    const loc = locate(id); if (!loc) return {};
+    const loc = curPlace(id); if (!loc) return {};
     const ids = DB.lists[loc.li].sections[loc.si].ids; return { prev: ids[loc.i - 1], next: ids[loc.i + 1] };
   }
   function songHTML() {
     const s = DB.songs[UI.songId]; if (!s) return '<div class="empty">Song not found</div>';
-    const loc = locate(s.id); const L = loc ? DB.lists[loc.li] : null; const S = loc ? L.sections[loc.si] : null;
-    const backLabel = UI.ctx && UI.ctx.type === 'tonight' ? ev().title : (UI.ctx && UI.ctx.type === 'search' ? 'Search' : (L ? L.name : 'Back'));
+    const loc = curPlace(s.id); const L = loc ? DB.lists[loc.li] : null; const S = loc ? L.sections[loc.si] : null;
+    const backLabel = UI.ctx && UI.ctx.type === 'tonight' ? ev().title : (UI.ctx && UI.ctx.type === 'search' ? 'Search' : (UI.ctx && UI.ctx.type === 'db' ? 'Database' : (L ? L.name : 'Back')));
+    const pl = places(s.id); const others = pl.filter(p => !(loc && p.li === loc.li && p.si === loc.si));
     const on = ev().ids.includes(s.id); const fav = DB.favs.includes(s.id);
     const li = linkInfo(s.youtube); const nav = navTargets();
     const parts = parseLyrics(s.lyrics);
@@ -313,7 +347,11 @@
         </div>
         <div class="rtl" style="display:flex;flex-direction:column;gap:4px">
           <span class="songtitle">${esc(s.title)}${s.known ? ' <span style="color:var(--ok);font-size:20px">✓</span>' : ''}</span>
-          <span class="meta"><button class="key${s.key ? '' : ' none'} keybtn" data-act="songkey" data-id="${s.id}" aria-label="Key: change it or see other songs in this key">${esc(s.key || '+ Add key')} ▾</button>${s.tune ? `<span>${esc(s.tune)}</span>` : ''}${S && S.name ? `<span>· ${esc(S.name)}</span>` : ''}${s.meter ? `<span>· ${esc(s.meter)}</span>` : ''}</span>
+          <span class="meta"><button class="key${s.key ? '' : ' none'} keybtn" data-act="songkey" data-id="${s.id}" aria-label="Key: change it or see other songs in this key">${keyHTML(s.key, '+ Add key')} ▾</button>${s.tune ? `<span>${esc(s.tune)}</span>` : ''}${S && S.name ? `<span>· ${esc(S.name)}</span>` : ''}${s.meter ? `<span>· ${esc(s.meter)}</span>` : ''}${freygish(s.key) ? `<span class="fry" dir="ltr">freygish · A in ${esc(freygish(s.key).a)}, B in ${esc(freygish(s.key).b)}</span>` : ''}</span>
+          ${s.partB ? `<span class="muted" style="font-size:14px">Part B starts: <b style="color:var(--ink)">${esc(s.partB)}</b></span>` : ''}
+          ${s.otherKeys ? `<span class="muted" style="font-size:13px" dir="ltr">Also sung in ${esc(s.otherKeys)}</span>` : ''}
+          <span class="places" dir="ltr">${pl.length ? (others.length ? `<span class="muted">Also in</span>${others.map(p => `<button class="chip" data-act="goplace" data-li="${p.li}" data-si="${p.si}">${esc(placeName(p))}</button>`).join('')}` : '') : `<span class="muted">${s.lang ? 'Lyrics · ' + esc(s.lang) + ' · ' : ''}Not on a list yet</span>`}<button class="chip add" data-act="places" data-id="${s.id}">${pl.length ? '＋ Lists' : '＋ Put on a list'}</button></span>
+          ${alsoInOther(s) ? `<span style="font-size:12px;font-weight:700;color:#1F5FBF">Also in ${esc(alsoInOther(s))}</span>` : ''}
         </div>
         <div class="actrow" style="display:flex;gap:8px">
           <button class="btn ${on ? '' : 'primary'}" style="flex:1${on ? ';background:var(--accent-soft);border-color:var(--accent);color:var(--accent-ink)' : ''}" data-act="star" data-id="${s.id}" data-re="1">${I.star(on).replace(/var\(--accent\)/g, on ? 'var(--accent)' : '#FFFDF8').replace('#9A8F80', '#FFFDF8')}${on ? 'Added · #' + (ev().ids.indexOf(s.id) + 1) : 'Add to event'}</button>
@@ -500,7 +538,8 @@
   // ---------- edit / add ----------
   function editHTML() {
     const e = UI.edit; const s = e.song;
-    const L = DB.lists[e.li]; const S = L.sections[e.si] || L.sections[0];
+    const noList = e.li < 0;
+    const L = noList ? { name: 'Database', sections: [{ name: '', ids: [] }] } : DB.lists[e.li]; const S = L.sections[e.si] || L.sections[0];
     const m = (s.key || '').match(/^([A-G][#b]?)(m?)$/); const root = m ? (ALIAS[m[1]] || m[1]) : null; const minor = m ? !!m[2] : e.minor !== false;
     const li = linkInfo(s.youtube);
     const posIds = S.ids.filter(id => id !== s.id);
@@ -521,6 +560,7 @@
           <label class="field"><span class="lbl">TITLE</span><input class="inp" dir="rtl" data-f="title" value="${esc(s.title)}" placeholder="Song title"></label>
           <label class="field"><span class="lbl">TUNE / COMPOSER</span><input class="inp" dir="rtl" data-f="tune" value="${esc(s.tune)}" placeholder="Optional"></label>
         </div>
+        <label class="field"><span class="lbl">PART B STARTS WITH (OPTIONAL)</span><input class="inp" dir="rtl" data-f="partB" value="${esc(s.partB || '')}" placeholder="First words of the high part"></label>
         <div class="field">
           <div style="display:flex;align-items:center;justify-content:space-between"><span class="lbl">KEY · <span style="color:var(--accent)">${esc(s.key || 'none')}</span>${s.keyAsWritten && s.keyAsWritten !== s.key ? ` <span class="muted" style="font-weight:400;letter-spacing:0">(written as “${esc(s.keyAsWritten)}”)</span>` : ''}</span>
             <div class="seg" style="width:150px"><button class="${!minor ? 'on' : ''}" data-act="kmode" data-v="maj">Major</button><button class="${minor ? 'on' : ''}" data-act="kmode" data-v="min">Minor</button></div></div>
@@ -532,10 +572,11 @@
           <button class="btn" style="min-height:38px;font-size:13px${s.known ? ';background:var(--ok-soft);color:var(--ok);border-color:var(--ok)' : ''}" data-act="known">${s.known ? '✓ I know it' : 'Mark as known'}</button>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <label class="field"><span class="lbl">LIST</span><select class="inp" data-act="elist">${DB.lists.map((x, i) => `<option value="${i}" ${i === e.li ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}</select></label>
+          <label class="field"><span class="lbl">LIST</span><select class="inp" data-act="elist">${DB.lists.map((x, i) => `<option value="${i}" ${i === e.li ? 'selected' : ''}>${esc(x.name)}</option>`).join('')}${e.isNew ? '' : `<option value="-1" ${noList ? 'selected' : ''}>— No list (database only)</option>`}</select></label>
           <label class="field"><span class="lbl">SECTION</span><select class="inp" dir="auto" data-act="esec">${L.sections.map((x, i) => `<option value="${i}" ${i === e.si ? 'selected' : ''}>${esc(x.name || 'Songs')}</option>`).join('')}</select></label>
         </div>
-        <div class="field"><span class="lbl">WHERE IN ${esc(S.name || L.name)} — <span style="color:var(--accent)">TAP THE SONG IT COMES AFTER</span></span>
+        ${noList ? '<span class="muted" style="font-size:12px">Kept in the song database — find it with search or the Database screen.</span>' : ''}
+        <div class="field"${noList ? ' style="display:none"' : ''}><span class="lbl">WHERE IN ${esc(S.name || L.name)} — <span style="color:var(--accent)">TAP THE SONG IT COMES AFTER</span></span>
           <div class="posbox" id="posbox">
             <button class="posrow${e.after === -1 ? ' new' : ''}" data-act="pos" data-v="-1"><span class="n"></span><span class="t">${e.after === -1 ? '＋ ' + esc(s.title || 'This song') + ' — at the top' : '↑ Put it at the top'}</span></button>
             ${posIds.map((id, i) => `<button class="posrow" data-act="pos" data-v="${i}"><span class="n">${i + 1}</span><span class="t">${esc(DB.songs[id].title)}</span></button>${e.after === i ? `<div class="posrow new"><span class="n">${i + 2}</span><span class="t">＋ ${esc(s.title || 'This song')} — goes here</span></div>` : ''}`).join('')}
@@ -562,9 +603,11 @@
       song = { id: null, title: '', tune: '', key: '', keyAsWritten: '', meter: '', known: false, youtube: '', youtubeIsSearch: false, aliases: '', lyrics: '', composers: '', singers: '' };
       after = DB.lists[li].sections[si].ids.length - 1;
     } else {
-      const loc = locate(id); li = loc.li; si = loc.si; after = loc.i - 1; song = Object.assign({}, DB.songs[id]);
+      const loc = curPlace(id); song = Object.assign({}, DB.songs[id]);
+      if (loc) { li = loc.li; si = loc.si; after = loc.i - 1; } else { li = -1; si = 0; after = -1; }
+      var orig = loc ? { li: loc.li, si: loc.si } : null;
     }
-    go('edit', { edit: { isNew, song, li, si, after, delArm: false } });
+    go('edit', { edit: { isNew, song, li, si, after, orig: orig || null, delArm: false } });
   }
   function applyLink(text) {
     const url = firstUrl(text) || (text || '').trim(); if (!url) { toast('Nothing to paste — copy a link first'); return; }
@@ -592,15 +635,15 @@
     s.title = s.title.trim(); if (!s.title) { toast('Give the song a title'); return; }
     s.key = s.key.trim(); const li = linkInfo(s.youtube); s.youtubeIsSearch = li.kind === 'YouTube search';
     if (e.isNew) { s.id = DB.nextId++; }
-    else { const loc = locate(s.id); DB.lists[loc.li].sections[loc.si].ids.splice(loc.i, 1); }
+    else if (e.orig) { const ids0 = DB.lists[e.orig.li].sections[e.orig.si].ids; const i0 = ids0.indexOf(s.id); if (i0 >= 0) ids0.splice(i0, 1); }
     if (e.trackFile) { s.track = e.trackFile.name; const f = e.trackFile; trackPut(s.id, f).then(() => toast('Track saved')).catch(() => { toast('Could not save the track — phone storage may be full'); delete DB.songs[s.id].track; saveDB(); }); }
     else if (e.trackRemove && s.track) { delete s.track; trackDel(s.id); }
     DB.songs[s.id] = s;
-    const ids = DB.lists[e.li].sections[e.si].ids; const others = ids; others.splice(Math.min(e.after + 1, others.length), 0, s.id);
+    if (e.li >= 0) { const ids = DB.lists[e.li].sections[e.si].ids; const j = ids.indexOf(s.id); if (j >= 0) ids.splice(j, 1); ids.splice(Math.min(e.after + 1, ids.length), 0, s.id); }
     saveDB();
     stack.pop();
     if (e.isNew) { UI.view = 'board'; UI.idx = e.li; render(); toast('Added to ' + DB.lists[e.li].name); setTimeout(() => scrollToSong(s.id), 50); }
-    else { UI.view = 'song'; UI.songId = s.id; render(); toast('Saved'); }
+    else { UI.view = 'song'; UI.songId = s.id; if (e.li >= 0) UI.ctx = { type: 'section', li: e.li, si: e.si }; render(); toast('Saved'); }
   }
   function scrollToSong(id) { const el = $(`.col[data-li="${UI.idx}"] .row[data-id="${id}"]`); const b = $('#board'); if (b) b.scrollLeft = UI.idx * colW(b); if (el) { el.scrollIntoView({ block: 'center' }); el.style.background = 'var(--accent-soft)'; setTimeout(() => el.style.background = '', 1500); } }
 
@@ -656,19 +699,54 @@
       if (UI.search.scope === 'this' && li !== UI.idx) return;
       L.sections.forEach(S => S.ids.forEach(id => {
         const s = DB.songs[id];
-        if (norm(s.title + ' ' + s.tune + ' ' + s.aliases + ' ' + s.composers + ' ' + s.singers).includes(q)) titles.push({ s, L, S });
+        if (norm(s.title + ' ' + s.tune + ' ' + s.aliases + ' ' + (s.partB || '') + ' ' + s.composers + ' ' + s.singers).includes(q)) titles.push({ s, L, S });
         else if (s.lyrics && norm(s.lyrics).includes(q)) {
           const line = s.lyrics.split('\n').find(l => norm(l).includes(q)) || '';
           lyr.push({ s, L, S, line: line.trim() });
         }
       }));
     });
+    if (UI.search.scope === 'all') {
+      const onList = new Set(); DB.lists.forEach(L => L.sections.forEach(S => S.ids.forEach(id => onList.add(id))));
+      const DBL = { name: 'Database' };
+      Object.values(DB.songs).forEach(s => {
+        if (onList.has(s.id)) return; const S = { name: s.lang || 'not on a list' };
+        if (norm(s.title + ' ' + s.tune + ' ' + s.aliases + ' ' + (s.partB || '')).includes(q)) titles.push({ s, L: DBL, S });
+        else if (s.lyrics && norm(s.lyrics).includes(q)) { const line = s.lyrics.split('\n').find(l => norm(l).includes(q)) || ''; lyr.push({ s, L: DBL, S, line: line.trim() }); }
+      });
+    }
     const t = ev();
     const row = (r, sub) => `<div class="srow"><button class="row star" style="height:46px;border:none" data-act="star" data-id="${r.s.id}" aria-label="Add to tonight">${I.star(t.ids.includes(r.s.id))}</button>
       <button class="open" data-act="opensearch" data-id="${r.s.id}"><span class="key${r.s.key ? '' : ' none'}">${esc(r.s.key || '—')}</span><span class="two"><b>${esc(r.s.title)}${r.s.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(r.s.tune)}</span>` : ''}</b><small>${sub}</small></span></button></div>`;
     const hl = (line) => { const n = norm(line); const i = n.indexOf(q); if (i < 0) return esc(line); return esc(line.slice(0, i)) + '<mark>' + esc(line.slice(i, i + q.length)) + '</mark>' + esc(line.slice(i + q.length)); };
     return `<div class="shead"><span class="muted">${titles.length} songs</span><b>IN THE TITLE</b></div>${titles.slice(0, 200).map(r => row(r, `<span dir="ltr">${esc(r.L.name)}</span> · ${esc(r.S.name)}`)).join('') || '<div class="empty">None</div>'}
       <div class="shead" style="margin-top:8px"><span class="muted">${lyr.length} songs</span><b>IN THE LYRICS</b></div>${lyr.slice(0, 100).map(r => row(r, '“' + hl(r.line) + '” · <span dir="ltr">' + esc(r.L.name) + '</span>')).join('') || '<div class="empty">None</div>'}`;
+  }
+
+  // ---------- song database (everything, including songs on no list and lyrics-only notes) ----------
+  function dbHTML() {
+    const onList = new Set(); DB.lists.forEach(L => L.sections.forEach(S => S.ids.forEach(id => onList.add(id))));
+    const all = Object.values(DB.songs);
+    const langs = []; all.forEach(s => { if (s.lang && !langs.includes(s.lang)) langs.push(s.lang); });
+    const tabs = [['off', 'Not on a list', all.filter(s => !onList.has(s.id)).length], ['all', 'All songs', all.length]].concat(langs.map(l => [l, l, all.filter(s => s.lang === l).length]));
+    const tab = UI.dbv.tab;
+    return `<div class="page">
+      <div style="padding:10px 14px;display:flex;flex-direction:column;gap:8px;border-bottom:var(--bw) solid var(--ink)">
+        <div class="hrow"><button class="back" data-act="back">${I.back}Board</button><b style="flex:1;text-align:center;margin-right:56px">Song database</b></div>
+        <label class="sbar">${I.search}<input id="dbq" dir="auto" value="${esc(UI.dbv.q)}" placeholder="Filter by title or tune" autocomplete="off"></label>
+        <div class="tabs">${tabs.map(t => `<button class="${tab === t[0] ? 'on' : ''}" data-act="dbtab" data-v="${esc(t[0])}" dir="auto">${esc(t[1])} <small>${t[2]}</small></button>`).join('')}</div>
+      </div>
+      <div class="scroll" id="dbres" style="padding:0 14px 40px">${dbResults(onList)}</div></div>`;
+  }
+  function dbResults(onList) {
+    if (!onList) { onList = new Set(); DB.lists.forEach(L => L.sections.forEach(S => S.ids.forEach(id => onList.add(id)))); }
+    const tab = UI.dbv.tab; const q = norm(UI.dbv.q.trim());
+    let ss = Object.values(DB.songs).filter(s => tab === 'all' ? true : tab === 'off' ? !onList.has(s.id) : s.lang === tab);
+    if (q) ss = ss.filter(s => norm(s.title + ' ' + s.tune + ' ' + s.aliases).includes(q));
+    ss.sort((a, b) => a.title.localeCompare(b.title, 'he'));
+    const n = ss.length; ss = ss.slice(0, 300);
+    return `<div class="shead"><span class="muted">${n} songs${n > 300 ? ' · showing 300, type to narrow' : ''}</span><b>${tab === 'off' ? 'NOT ON A LIST' : esc(tab === 'all' ? 'ALL' : tab)}</b></div>` +
+      (ss.map(s => `<div class="srow"><button class="open" data-act="dbopen" data-id="${s.id}"><span class="key${s.key ? '' : ' none'}">${keyHTML(s.key)}</span><span class="two"><b>${esc(s.title)}${s.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(s.tune)}</span>` : ''}</b><small>${onList.has(s.id) ? '' : 'not on a list'}${s.lyrics ? (onList.has(s.id) ? '' : ' · ') + 'lyrics' + (s.lang ? ' · ' + esc(s.lang) : '') : ''}</small></span></button></div>`).join('') || '<div class="empty">Nothing here</div>');
   }
 
   // ---------- tonight ----------
@@ -698,7 +776,7 @@
         return `<div class="trow"><span class="num">${i + 1}</span>
           ${UI.reorder ? `<button class="mv" data-act="mv" data-i="${i}" data-d="-1" aria-label="Move up" ${i ? '' : 'disabled style="opacity:.3"'}>↑</button><button class="mv" data-act="mv" data-i="${i}" data-d="1" aria-label="Move down" ${i < t.ids.length - 1 ? '' : 'disabled style="opacity:.3"'}>↓</button>` : ''}
           <button class="open" style="flex:1;min-width:0;display:flex;align-items:center;gap:10px;border:none;background:none;padding:4px 0;text-align:right" data-act="opentonight" data-id="${id}">
-            <span class="key${s.key ? '' : ' none'}">${esc(s.key || '—')}</span>
+            <span class="key${s.key ? '' : ' none'}">${keyHTML(s.key)}</span>
             <span class="two" style="flex:1;min-width:0;display:flex;flex-direction:column;direction:rtl;line-height:1.2"><b style="font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(s.title)}</b><small class="muted" style="font-size:12px"><span dir="ltr">${L ? esc(L.name) : ''}</span>${loc && L.sections[loc.si].name ? ' · ' + esc(L.sections[loc.si].name) : ''}</small></span></button>
           ${UI.reorder ? `<button class="mv" data-act="unstar" data-id="${id}" aria-label="Remove" style="color:var(--danger);border-color:var(--danger)">✕</button>` : ''}</div>`; }).join('') : '<div class="empty">Nothing yet. Tap ★ on any song to add it here — or long-press ★ to pick a different date.</div>'}</div></div>`;
   }
@@ -718,7 +796,7 @@
         <button class="back" style="color:#F6F1E7;font-size:13px;font-weight:800;min-height:36px" data-act="endgig">End</button></div>
       <div class="rtl" style="padding:12px 18px 6px;display:flex;align-items:center;gap:10px;border-bottom:var(--bw) solid var(--ink)">
         <span style="flex:1;font-size:30px;font-weight:800;line-height:1.1">${esc(s.title)}</span>
-        <span class="key" style="height:32px;font-size:17px;padding:0 8px">${esc(s.key || '—')}</span></div>
+        <span class="key" style="height:32px;font-size:17px;padding:0 8px">${keyHTML(s.key)}</span></div>
       <div class="scroll">${parts.length ? lyricsHTML(s.lyrics) : `<div class="nolyrics">No lyrics for this song.${s.tune ? ' Tune: ' + esc(s.tune) : ''}</div>`}</div>
       <div class="footnav">
         <button class="ibtn" style="width:64px;height:64px" data-act="gigprev" aria-label="Previous song" ${i ? '' : 'disabled style="width:64px;height:64px;opacity:.3"'}>${I.back}</button>
@@ -737,6 +815,11 @@
         <button class="btn primary" style="min-height:50px;font-size:16px" data-act="backup">Back up now (download file)</button>
         <button class="btn" data-act="restore">Restore from a backup file</button>
         <button class="btn" data-act="csv">Download as a spreadsheet (.csv)</button>
+        <div style="height:1px;background:var(--line2);margin:4px 0"></div>
+        <div class="field"><span class="lbl">LIBRARY</span><div class="seg">${Object.keys(LIBS).map(k => `<button class="${SET.lib === k ? 'on' : ''}" data-act="lib" data-v="${k}">${esc(LIBS[k].name)}</button>`).join('')}</div></div>
+        <button class="btn primary" data-act="importsongs">Import songs into ${esc(LIBS[SET.lib].name)}</button>
+        <span class="muted" style="font-size:12px;line-height:1.4">Adds songs from an import file. Songs already in this library (same title and artist) are skipped, nothing is deleted.</span>
+        <input type="file" id="importfile" accept=".json,application/json" class="hidden">
         <input type="file" id="restorefile" accept=".json,application/json" class="hidden">
         <div style="height:1px;background:var(--line2);margin:4px 0"></div>
         <div class="field"><span class="lbl">LOOK</span><div class="seg"><button class="${SET.look === 'A' ? 'on' : ''}" data-act="look" data-v="A">Look A · Linen</button><button class="${SET.look === 'B' ? 'on' : ''}" data-act="look" data-v="B">Look B · Quiet</button></div></div>
@@ -753,6 +836,57 @@
     return '﻿' + rows.map(r => r.map(q).join(',')).join('\r\n');
   }
 
+  // import format v2: { songs: [{ ref, title, tune, key, otherKeys, meter, partB, lyrics, lang, aliases }],
+  //   lists: [{ name, sections: [{ name, refs: [ref…] }] }], events: [{ title, date, archived, refs: [ref…] }] }
+  // A song can sit in several sections; songs in no section live in the song database (search + Database screen).
+  // v1 (older): { lists: [{ name, sections: [{ name, songs: [{ title, tune, key, … }] }] }] }
+  function importSongs(d) {
+    const sig = s => norm(s.title).replace(/\s+/g, ' ').trim() + '|' + norm(s.tune || '').replace(/\s+/g, ' ').trim();
+    const have = {}; Object.values(DB.songs).forEach(s => { have[sig(s)] = s.id; });
+    let added = 0, skipped = 0;
+    const mk = x => {
+      const k = sig(x); if (have[k] != null) { skipped++; return have[k]; }
+      const id = DB.nextId++;
+      DB.songs[id] = { id, title: x.title, tune: x.tune || '', composers: '', singers: '', key: x.key || '', keyAsWritten: x.keyAsWritten || x.key || '', otherKeys: x.otherKeys || '', meter: x.meter || '', known: !!x.known, youtube: x.youtube || '', youtubeIsSearch: false, aliases: x.aliases || '', partB: x.partB || '', lyrics: x.lyrics || '', lang: x.lang || '' };
+      have[k] = id; added++; return id;
+    };
+    const byRef = {};
+    (d.songs || []).forEach(x => { if (x && x.title) byRef[x.ref] = mk(x); });
+    (d.lists || []).forEach(IL => {
+      let L = DB.lists.find(x => x.name === IL.name);
+      if (!L) { L = { name: IL.name, sections: [] }; DB.lists.push(L); }
+      (IL.sections || []).forEach(IS => {
+        let S = L.sections.find(x => x.name === (IS.name || ''));
+        if (!S) { S = { name: IS.name || '', ids: [] }; L.sections.push(S); }
+        const ids = (IS.refs || []).map(r => byRef[r]).concat((IS.songs || []).filter(x => x && x.title).map(mk));
+        ids.forEach(id => { if (id != null && !S.ids.includes(id)) S.ids.push(id); });
+      });
+    });
+    (d.events || []).forEach(E => {
+      if (DB.events.some(e => e.title === E.title && (e.date || '') === (E.date || ''))) return;
+      DB.events.push({ id: 'e' + (DB.nextId++), title: E.title, date: E.date || '', calendar: '', playlist: '', archived: !!E.archived, ids: (E.refs || []).map(r => byRef[r]).filter(id => id != null) });
+    });
+    // drop the empty starters once real content exists
+    DB.lists = DB.lists.filter(x => !(x.name === 'My songs' && listTotal(x) === 0 && DB.lists.length > 1));
+    return { added, skipped };
+  }
+
+  // one-time repair of Joel's library on phones that already loaded it: keys Joe wrote in shorthand (F/, /F, #C, Gma…)
+  // or inside the title, and Joe's original list order
+  const JOELFIX1 = {"58":["F/Bbm",null,null,null],"60":["F/Bbm",null,null,null],"61":["F/Bbm",null,null,null],"62":["F/Bbm",null,null,null],"63":["F/Bbm",null,null,null],"64":["F/Bbm",null,null,null],"65":["F/Bbm",null,null,null],"66":["F/Bbm",null,null,null],"67":["F/Bbm",null,null,null],"68":["F/Bbm",null,null,null],"69":["F/Bbm",null,null,null],"70":["G/Cm",null,null,null],"71":["D/Gm",null,null,null],"72":["F/Bbm",null,null,null],"73":["F/Bbm",null,null,null],"74":["F/Bbm",null,null,null],"75":["F/Bbm",null,null,null],"76":["E/Am",null,null,null],"77":["F/Bbm",null,null,null],"78":["F/Bbm",null,null,null],"79":["F/Bbm",null,null,null],"80":["D/Gm",null,null,null],"104":["F/Bbm",null,null,null],"128":["F/Bbm",null,null,null],"220":["F/Bbm",null,null,null],"258":["F/Bbm",null,null,null],"259":["F/Bbm",null,null,null],"260":["F/Bbm",null,null,null],"274":["G/Cm",null,null,null],"275":["G/Cm",null,null,null],"276":["G/Cm",null,null,null],"278":["A/Dm",null,null,null],"283":["C/Fm",null,null,null],"287":["C#",null,null,null],"304":["C#",null,null,null],"339":["C#",null,null,null],"356":["Ab",null,null,null],"370":["C/Fm",null,null,null],"372":["E/Am",null,null,null],"417":["A/Dm",null,null,null],"686":["F/G","זכור אהבת קדומים F G","זכור אהבת קדומים",null],"689":["G","יכירו בניך וידעו G","יכירו בניך וידעו",null],"690":["G","ניגון בעלזא  G","ניגון בעלזא",null],"691":["D","מה יתרון לאדם D","מה יתרון לאדם",null],"693":["D","שומרי D","שומרי",null],"694":["G","כי אני עמך G","כי אני עמך",null],"695":["G","ניגן חב״ד וועבער G","ניגן חב״ד וועבער",null],"697":["G","טייערע ברידער G","טייערע ברידער",null],"698":["F/G","ניגן מעידשער פרעגעש קרלין F G","ניגן מעידשער פרעגעש קרלין",null],"699":["G","ווערדיגער חבד G","ווערדיגער חבד",null],"700":["G","שבת שלום G","שבת שלום",null],"701":["G","מירון G","מירון",null],"702":["G","אמר ר׳ עקיבא מבד G","אמר ר׳ עקיבא מבד",null],"704":["G","האדרת והאמונה G","האדרת והאמונה",null],"705":["F#/G","האדרת דודי קאליש, יששכר F sharp or Gma","האדרת דודי קאליש, יששכר",null],"706":["F#/G","קומי רונו בלילה / שפכי כמים F sharp or G","קומי רונו בלילה / שפכי כמים",null],"709":["C","אנא אנא - י ווערדיגער C","אנא אנא - י ווערדיגער",null],"710":["F#/G","אנת הוא זן לכולא F sharp or G","אנת הוא זן לכולא",null],"711":["G","אחד יחיד G","אחד יחיד",null],"713":["G","אשרינו חב\"ד מעיזשאר G","אשרינו חב\"ד מעיזשאר",null],"715":["G","תרננה שפתי כי אזמרה לך G","תרננה שפתי כי אזמרה לך",null],"718":["G","מעין עולם הבא פריד G","מעין עולם הבא פריד",null],"719":["F/G","הנה קל ישועתי F G","הנה קל ישועתי",null],"720":["G","דע רבי האט געהייסן פריילאך זיין G","דע רבי האט געהייסן פריילאך זיין",null],"722":["D","וזכנו לראות בנים D","וזכנו לראות בנים",null],"723":["F/F#","ניגון ר משה ארי' F - F sharp","ניגון ר משה ארי'",null],"724":["C/D","כל העולם כולו גשר ברסלב C or D","כל העולם כולו גשר ברסלב",null],"725":["G","שמחה לארציך G","שמחה לארציך",null],"726":["G","שלום עליכם אביש בראדט G","שלום עליכם אביש בראדט",null],"727":["F/G","ניגוני חב\"ד  F and G Fried","ניגוני חב\"ד","פריד"],"730":["F/G","קריץ מחומר  F or G","קריץ מחומר",null],"731":["F/G","ואמרתם / בזכות התנא ש דאסקאל  F/G","ואמרתם / בזכות התנא ש דאסקאל",null],"757":["A/E",null,null,null],"766":["C",null,null,null],"821":["A/E",null,null,null],"866":["G/A/D/E",null,null,null],"872":["G",null,null,null],"883":["F",null,null,null],"891":["F",null,null,null],"892":["G",null,null,null],"894":["F#/G",null,null,null],"930":["F",null,null,null],"937":["G",null,null,null],"938":["G",null,null,null],"940":["E/F",null,null,null]};
+  const JOEL_ORDER = ["1st Dance List", "2nd Dance List", "Chupah", "Meal", "Hachnosas Sefer Torah", "Kumzitz", "Rock", "Kumzitz 2"];
+  function repairJoel() {
+    if (SET.lib !== 'joel' || DB.fix1) return;
+    Object.keys(JOELFIX1).forEach(id => { const s = DB.songs[id]; const f = JOELFIX1[id]; if (!s || s.key) return;
+      if (f[1]) { if (s.title !== f[1]) return; s.keyAsWritten = s.title.slice(f[2].length).trim(); s.title = f[2]; if (f[3] && !s.tune) s.tune = f[3]; }
+      s.key = f[0]; });
+    if (JOEL_ORDER.every(n => DB.lists.some(L => L.name === n))) DB.lists.sort((a, b) => { const ia = JOEL_ORDER.indexOf(a.name), ib = JOEL_ORDER.indexOf(b.name); return (ia < 0 ? 99 : ia) - (ib < 0 ? 99 : ib); });
+    DB.fix1 = true; saveDB();
+  }
+
+  function places(id) { const out = []; DB.lists.forEach((L, li) => L.sections.forEach((S, si) => { if (S.ids.includes(id)) out.push({ li, si }); })); return out; }
+  function placeName(p) { const L = DB.lists[p.li]; const S = L.sections[p.si]; return L.name + (S.name ? ' › ' + S.name : ''); }
+
   // ---------- overlays ----------
   function overlayHTML() {
     const o = UI.overlay; if (!o) return '';
@@ -763,19 +897,24 @@
       return `<div class="scrim top" data-act="close"><div class="menu" style="max-width:520px"><div class="mh">SECTIONS · ${esc(L.name).toUpperCase()}</div>${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
     }
     if (o.type === 'lists') {
-      return `<div class="scrim top" data-act="close"><div class="menu"><div class="mh">JUMP TO A LIST</div>${DB.lists.map((L, i) => `<button class="opt${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}"><span>${esc(L.name)}</span><small>${listTotal(L)}</small></button>`).join('')}</div></div>`;
+      return `<div class="scrim top" data-act="close"><div class="menu"><div class="mh">LIBRARY</div>
+        <div style="padding:4px 12px 10px"><div class="seg">${Object.keys(LIBS).map(k => `<button class="${SET.lib === k ? 'on' : ''}" data-act="lib" data-v="${k}">${esc(LIBS[k].name)}</button>`).join('')}</div></div>
+        <div class="mh">JUMP TO A LIST</div>${DB.lists.map((L, i) => `<button class="opt${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}"><span>${esc(L.name)}</span><small>${listTotal(L)}</small></button>`).join('')}
+        <button class="opt" data-act="opendb" style="border-top:1.5px solid var(--line2)"><span>Song database${Object.values(DB.songs).some(s => s.lang) ? ' & lyrics' : ''}</span><small>${Object.keys(DB.songs).length}</small></button></div></div>`;
     }
     if (o.type === 'keys') {
-      const counts = {}; Object.values(DB.songs).forEach(s => keyParts(s.key).forEach(k => counts[k] = (counts[k] || 0) + 1));
-      const sel = o.key !== undefined ? o.key : UI.keyFilter; const near = o.near !== undefined ? o.near : UI.near;
-      const nb = sel ? neighbors(sel) : [];
-      const kb = k => `<button class="kbtn${k === sel ? ' on' : (near && nb.includes(k) ? ' near' : '')}" data-act="kpick" data-v="${k}">${k}<small>${counts[k] || 0}</small></button>`;
-      let total = 0; if (sel) Object.values(DB.songs).forEach(s => { const p = keyParts(s.key); if (p.includes(sel) || (near && p.some(x => nb.includes(x)))) total++; });
+      const counts = {}; Object.values(DB.songs).forEach(s => { keyParts(s.key).forEach(k => counts[k] = (counts[k] || 0) + 1); const f = freygish(s.key); if (f) counts[f.a + 'fre'] = (counts[f.a + 'fre'] || 0) + 1; });
+      const sel = o.key !== undefined ? o.key : UI.keyFilter; const near = o.near !== undefined ? o.near : UI.near; const selFre = !!sel && /fre$/.test(sel);
+      const nb = sel && !selFre ? neighbors(sel) : [];
+      const kb = k => `<button class="kbtn${k === sel ? ' on' : (near && nb.includes(k) ? ' near' : '')}" data-act="kpick" data-v="${k}">${/fre$/.test(k) ? k.slice(0, -3) + '<small class="fre" style="display:inline;margin:0">fre</small>' : k}<small>${counts[k] || 0}</small></button>`;
+      let total = 0; if (sel) Object.values(DB.songs).forEach(s => { if (selFre) { const f = freygish(s.key); if (f && f.a === sel.slice(0, -3)) total++; return; } const p = keyParts(s.key); if (p.includes(sel) || (near && p.some(x => nb.includes(x)))) total++; });
+      const freKeys = ROOTS.filter(r => counts[r + 'fre']).map(r => r + 'fre');
       return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1"><span class="grab"></span>
         <div style="display:flex;align-items:center;justify-content:space-between"><b style="font-size:20px">Pick a key</b><button class="link" style="color:var(--accent);text-decoration:none;font-size:15px" data-act="kclear">Show all</button></div>
         <span class="lbl">MINOR</span><div class="grid4">${ROOTS.map(r => r + 'm').map(kb).join('')}</div>
         <span class="lbl">MAJOR</span><div class="grid4">${ROOTS.map(kb).join('')}</div>
-        <button class="toggle" data-act="knear"><span><b>Include neighbouring keys</b><small>${sel ? 'Also show ' + nb.join(' and ') : 'Pick a key first'}</small></span><span class="switch${near ? ' on' : ''}"><i></i></span></button>
+        ${freKeys.length ? `<span class="lbl">FREYGISH</span><div class="grid4">${freKeys.map(kb).join('')}</div>` : ''}
+        <button class="toggle" data-act="knear"><span><b>Include neighbouring keys</b><small>${sel && !selFre ? 'Also show ' + nb.join(' and ') : (selFre ? 'Not used for freygish' : 'Pick a key first')}</small></span><span class="switch${near ? ' on' : ''}"><i></i></span></button>
         <button class="btn dark" style="min-height:52px;font-size:16px" data-act="kapply">${sel ? 'Show ' + total + ' songs' : 'Show all songs'}</button></div></div>`;
     }
     if (o.type === 'peek') {
@@ -786,7 +925,7 @@
       return `<div class="scrim" data-act="close" style="justify-content:center;align-items:center;padding:16px"><div class="menu peek" data-stop="1">
         <div class="rtl" style="display:flex;align-items:center;gap:8px;padding:12px 14px 8px;border-bottom:1px solid var(--line2)">
           <span style="flex:1;min-width:0;display:flex;flex-direction:column;line-height:1.2"><b style="font-size:20px">${esc(s.title)}</b>${s.tune ? `<small class="muted" style="font-size:13px">${esc(s.tune)}</small>` : ''}</span>
-          <span class="key" style="height:26px;font-size:13px">${esc(s.key || '—')}</span></div>
+          <span class="key" style="height:26px;font-size:13px">${keyHTML(s.key)}</span></div>
         <div class="peekbody" id="peekbody">${parts.length ? lyricsHTML(s.lyrics, 19) : '<div class="nolyrics">No lyrics for this song yet.</div>'}</div>
         <div style="display:flex;gap:6px;padding:10px 12px;border-top:1px solid var(--line2)">
           <button class="ibtn" data-act="peekgo" data-id="${prev || ''}" aria-label="Previous song" ${prev ? '' : 'disabled style="opacity:.3"'}>${I.back}</button>
@@ -799,7 +938,8 @@
     if (o.type === 'songkey') {
       const s = DB.songs[o.id]; const parts = keyParts(s.key); const k = parts[0] || null;
       const m = k ? k.match(/^([A-G][#b]?)(m?)$/) : null; const root = m ? m[1] : null;
-      const minor = o.minor !== undefined ? o.minor : (m ? !!m[2] : true);
+      const isFry = !!freygish(s.key); const mode = o.mode || (isFry ? 'fre' : (m && !m[2] ? 'maj' : 'min')); const minor = mode === 'min';
+      const curRoot = isFry ? freygish(s.key).a : root;
       const want = k ? [k].concat(o.near ? neighbors(k) : []) : [];
       const loc = locate(s.id); const L = loc ? DB.lists[loc.li] : null; const S = L ? L.sections[loc.si] : null;
       const match = id => id !== s.id && keyParts(DB.songs[id].key).some(p => want.includes(p));
@@ -807,13 +947,17 @@
       const inList = k && L ? L.sections.filter(x => x !== S).reduce((a, x) => a.concat(x.ids.filter(match)), []) : [];
       let other = 0; if (k) DB.lists.forEach((LL, i) => { if (!loc || i !== loc.li) LL.sections.forEach(x => other += x.ids.filter(match).length); });
       const t = ev();
-      const row = id => { const x = DB.songs[id]; return `<div class="srow" style="min-height:42px"><button class="star" style="width:32px;height:40px;border:none;background:none;padding:0;display:flex;align-items:center;justify-content:center" data-act="star" data-id="${id}" data-re="1" aria-label="Add to event">${I.star(t.ids.includes(id))}</button><button class="open" data-act="open" data-id="${id}"><span class="key">${esc(x.key)}</span><span class="two"><b>${esc(x.title)}${x.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(x.tune)}</span>` : ''}</b></span></button></div>`; };
+      const row = id => { const x = DB.songs[id]; return `<div class="srow" style="min-height:42px"><button class="star" style="width:32px;height:40px;border:none;background:none;padding:0;display:flex;align-items:center;justify-content:center" data-act="star" data-id="${id}" data-re="1" aria-label="Add to event">${I.star(t.ids.includes(id))}</button><button class="open" data-act="open" data-id="${id}"><span class="key">${keyHTML(x.key)}</span><span class="two"><b>${esc(x.title)}${x.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(x.tune)}</span>` : ''}</b></span></button></div>`; };
       return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1" style="max-width:600px;width:100%;margin:0 auto"><span class="grab"></span>
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b style="font-size:19px">${k ? 'Key · <span style="color:var(--accent)">' + esc(s.key) + '</span>' : 'Add a key'}</b>
-          <div class="seg" style="width:150px"><button class="${!minor ? 'on' : ''}" data-act="skmode" data-v="maj">Major</button><button class="${minor ? 'on' : ''}" data-act="skmode" data-v="min">Minor</button></div></div>
-        <div class="grid6">${ROOTS.map(r => `<button class="kbtn" style="min-height:40px;font-size:14px${root === r && (!!(m && m[2])) === minor ? ';background:var(--accent);border-color:var(--accent);color:#fff' : ''}" data-act="skset" data-v="${r}">${r}${minor ? 'm' : ''}</button>`).join('')}</div>
+        ${o.from === 'row' ? `<b dir="auto" style="font-size:16px;text-align:right">${esc(s.title)}${s.tune ? ` <span class="muted" style="font-weight:400;font-size:13px">· ${esc(s.tune)}</span>` : ''}</b>` : ''}
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px"><b style="font-size:19px">${k ? 'Key · <span style="color:var(--accent)">' + keyHTML(s.key) + '</span>' + (freygish(s.key) ? ' <small class="muted" style="font-weight:500">(' + esc(s.key) + ')</small>' : '') : 'Add a key'}</b>
+          <div class="seg" style="width:210px"><button class="${mode === 'maj' ? 'on' : ''}" data-act="skmode" data-v="maj">Major</button><button class="${mode === 'min' ? 'on' : ''}" data-act="skmode" data-v="min">Minor</button><button class="${mode === 'fre' ? 'on' : ''}" data-act="skmode" data-v="fre">Freygish</button></div></div>
+        <div class="grid6">${ROOTS.map(r => { const sel = mode === 'fre' ? (isFry && curRoot === r) : (!isFry && root === r && (!!(m && m[2])) === minor && parts.length === 1); return `<button class="kbtn" style="min-height:40px;font-size:14px${sel ? ';background:var(--accent);border-color:var(--accent);color:#fff' : ''}" data-act="skset" data-v="${r}">${r}${mode === 'min' ? 'm' : mode === 'fre' ? '<small class="fre">fre</small>' : ''}</button>`; }).join('')}</div>
+        ${mode === 'fre' ? '<span class="muted" style="font-size:12px">Freygish = part A on the major, part B in the minor a 5th below (E fre → B part in Am). Transposes and filters as both.</span>' : ''}
+        ${k ? `<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn small${o.two ? ' on' : ''}" style="${o.two ? 'background:var(--ink);color:var(--bg);border-color:var(--ink)' : ''}" data-act="sktwo">${o.two ? 'Now tap the 2nd key…' : '＋ Second key (e.g. ' + esc(k) + '/…)'}</button></div>` : ''}
         ${k ? `<div style="display:flex;justify-content:space-between;align-items:center"><button class="link" data-act="skclear" style="color:var(--danger)">Remove key</button><span class="muted" style="font-size:12px">Tap a note to change it — saved right away</span></div>` : '<span class="muted" style="font-size:12px">Tap a note — saved right away</span>'}
-        ${k ? `<div style="height:1px;background:var(--line2)"></div>
+        ${o.from === 'row' ? `<button class="btn dark" style="min-height:46px" data-act="close">Done</button>` : ''}
+        ${k && o.from !== 'row' ? `<div style="height:1px;background:var(--line2)"></div>
         <button class="toggle" style="min-height:44px" data-act="sknear"><span><b>Include neighbouring keys</b><small>${esc(neighbors(k).join(' and '))}</small></span><span class="switch${o.near ? ' on' : ''}"><i></i></span></button>
         <div style="max-height:38dvh;overflow-y:auto">
           <div class="shead"><span class="muted">${inSec.length}</span><b dir="auto">ALSO IN ${esc(k)}${o.near ? ' ±' : ''} · ${esc(S && S.name ? S.name : 'THIS SECTION')}</b></div>
@@ -824,13 +968,14 @@
       </div></div>`;
     }
     if (o.type === 'events') {
-      const { up, past, none } = evSorted();
+      const { up, past, none: none0 } = evSorted(); const none = none0.filter(e => !e.archived); const arch = none0.filter(e => e.archived);
       const item = e => `<button class="opt${e.id === DB.currentEvent ? ' on' : ''}" data-act="pickev" data-v="${e.id}" style="min-height:52px"><span style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(e.title)}</span><small>${e.date ? esc(fmtDate(e.date)) + (e.date === today() ? ' · today' : '') : 'no date'}</small></span><small>${e.ids.length} songs${e.id === DB.currentEvent ? ' · ★ adding here' : ''}</small></button>`;
       return `<div class="scrim top" data-act="close"><div class="menu">
         <button class="opt" data-act="newevsheet" style="color:var(--accent);font-weight:800">＋ New event</button>
         ${up.length ? `<div class="mh">UPCOMING</div>${up.map(item).join('')}` : ''}
         ${none.length ? `<div class="mh">NO DATE</div>${none.map(item).join('')}` : ''}
         ${past.length ? `<div class="mh">PAST</div>${past.map(item).join('')}` : ''}
+        ${arch.length ? `<button class="opt" data-act="pastgigs" style="font-weight:800"><span>Old gig lists</span><small>${arch.length} ${o.showPast ? '▴' : '▾'}</small></button>${o.showPast ? arch.map(item).join('') : ''}` : ''}
         <button class="opt" data-act="evdetails" style="font-weight:500">Rename / change date of “${esc(ev().title)}”…</button></div></div>`;
     }
     if (o.type === 'newev') {
@@ -841,13 +986,20 @@
         <button class="btn primary" style="min-height:50px" data-act="createev">Create — ★ will add here</button></div></div>`;
     }
     if (o.type === 'addto') {
-      const sid = o.id; const sg = DB.songs[sid]; const { up, past, none } = evSorted();
+      const sid = o.id; const sg = DB.songs[sid]; const { up, past, none: none0 } = evSorted(); const none = none0.filter(e => !e.archived);
       const item = e => { const has = e.ids.includes(sid); return `<button class="opt${has ? ' on' : ''}" data-act="toggleto" data-v="${e.id}" style="min-height:50px"><span style="display:flex;flex-direction:column;align-items:flex-start"><span>${esc(e.title)}</span><small>${e.date ? esc(fmtDate(e.date)) : 'no date'} · ${e.ids.length} songs</small></span><span style="font-size:18px;color:var(--accent)">${has ? '★' : '☆'}</span></button>`; };
       return `<div class="scrim" data-act="close" style="justify-content:center;padding:16px"><div class="menu" data-stop="1" style="margin:0">
         <div class="mh" style="font-size:13px;letter-spacing:0;color:var(--ink);padding:12px" dir="auto">Add “${esc(sg.title)}” to…</div>
         ${up.concat(none).map(item).join('')}${past.length ? `<div class="mh">PAST</div>${past.slice(0, 5).map(item).join('')}` : ''}
         <button class="opt" data-act="newevsheet" style="color:var(--accent)">＋ New event</button>
         <button class="opt" data-act="close" style="justify-content:center">Done</button></div></div>`;
+    }
+    if (o.type === 'places') {
+      const sg = DB.songs[o.id];
+      return `<div class="scrim" data-act="close" style="justify-content:center;padding:16px"><div class="menu" data-stop="1" style="margin:0;max-width:520px">
+        <div class="mh" style="font-size:13px;letter-spacing:0;color:var(--ink);padding:12px" dir="auto">Lists for “${esc(sg.title)}” — tap to add or remove</div>
+        ${DB.lists.map((L, li) => `<div class="mh">${esc(L.name).toUpperCase()}</div>` + L.sections.map((S, si) => { const has = S.ids.includes(o.id); return `<button class="opt${has ? ' on' : ''}" data-act="toggleplace" data-li="${li}" data-si="${si}" style="min-height:44px"><span dir="auto">${esc(S.name || 'Songs')}</span><span style="font-size:18px;color:var(--accent)">${has ? '✓' : '＋'}</span></button>`; }).join('')).join('')}
+        <button class="opt" data-act="close" style="justify-content:center;font-weight:800">Done</button></div></div>`;
     }
     if (o.type === 'evdetails') {
       const t = ev();
@@ -897,6 +1049,8 @@
       updateTop();
       if (visCols() > 1) refreshHeader();
     }
+    const dq = $('#dbq');
+    if (dq) dq.addEventListener('input', () => { UI.dbv.q = dq.value; $('#dbres').innerHTML = dbResults(); });
     const sq = $('#sq');
     if (sq) { sq.focus(); sq.setSelectionRange(sq.value.length, sq.value.length); sq.addEventListener('input', () => { UI.search.q = sq.value; $('#sres').innerHTML = searchResults(); }); const sr = $('#sres'); sr.addEventListener('touchstart', () => sq.blur(), { passive: true }); sr.addEventListener('scroll', () => { if (document.activeElement === sq) sq.blur(); }, { passive: true }); }
     const yt = $('[data-f="youtube"]');
@@ -907,10 +1061,14 @@
     const lt = $('#lyrta'); if (lt) lt.addEventListener('input', () => { UI.lyr.text = lt.value; UI.lyr.cancelArm = false; });
     const tf = $('#trackfile');
     if (tf) tf.addEventListener('change', () => { const f = tf.files[0]; if (!f) return; if (f.size > 60 * 1024 * 1024) { toast('That file is over 60 MB — try a smaller MP3'); return; } readForm(); UI.edit.trackFile = f; UI.edit.trackRemove = false; render(); });
+    const imf = $('#importfile');
+    if (imf) imf.addEventListener('change', () => { const f = imf.files[0]; if (!f) return; const r = new FileReader(); r.onload = () => { const d = safeJSON(r.result); if (!d || !(d.lists || d.songs)) { toast('That is not an import file'); return; } const res = importSongs(d); saveDB(); loadOther(); render(); toast(`Added ${res.added} songs${res.skipped ? ` · ${res.skipped} already here, skipped` : ''}`); }; r.readAsText(f); });
     const rf = $('#restorefile');
     if (rf) rf.addEventListener('change', () => {
       const f = rf.files[0]; if (!f) return; const r = new FileReader();
-      r.onload = () => { const d = safeJSON(r.result); if (d && d.songs && d.lists) { DB = d; saveDB(); toast('Restored ' + Object.keys(d.songs).length + ' songs'); render(); } else toast('That file is not a Song Library backup'); };
+      r.onload = () => { const d = safeJSON(r.result);
+        if (d && d.libraries) { Promise.all(Object.keys(d.libraries).filter(k => LIBS[k]).map(k => libPut(k, d.libraries[k]))).then(() => { DB = d.libraries[SET.lib] || DB; loadOther(); toast('Restored both libraries'); render(); }); }
+        else if (d && d.songs && d.lists) { DB = d; saveDB(); toast('Restored ' + Object.keys(d.songs).length + ' songs into ' + LIBS[SET.lib].name); render(); } else toast('That file is not a Song Library backup'); };
       r.readAsText(f);
     });
     if (UI.view === 'gig') keepAwake(true); else keepAwake(false);
@@ -938,16 +1096,23 @@
         break; }
       case 'unstar': { const t = ev(); t.ids = t.ids.filter(x => x !== id); saveDB(); render(); break; }
       case 'fav': { const i = DB.favs.indexOf(id); if (i >= 0) DB.favs.splice(i, 1); else DB.favs.push(id); saveDB(); if (UI.view === 'board') { if (UI.sec[UI.idx] === '__fav') refreshBoardBody(); else { refreshRows(id); refreshHeader(); } } else render(); break; }
-      case 'open': if (UI.zoom) break; UI.overlay = null; go('song', { songId: id, ctx: { type: 'section' } }); break;
+      case 'open': { if (UI.zoom) break; UI.overlay = null; const rw = el.closest('.row'); go('song', { songId: id, ctx: { type: 'section', li: rw && rw.dataset.li != null ? +rw.dataset.li : null, si: rw && rw.dataset.si != null ? +rw.dataset.si : null } }); break; }
       case 'opensearch': go('song', { songId: id, ctx: { type: 'search' } }); break;
       case 'opentonight': go('song', { songId: id, ctx: { type: 'tonight' } }); break;
       case 'peek': UI.overlay = { type: 'peek', id }; render(); break;
       case 'songkey': UI.overlay = { type: 'songkey', id, near: false }; render(); break;
-      case 'skmode': UI.overlay.minor = el.dataset.v === 'min'; { const s2 = DB.songs[UI.overlay.id]; const m2 = (keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)(m?)$/); if (m2) { s2.key = m2[1] + (UI.overlay.minor ? 'm' : ''); saveDB(); } } render(); break;
-      case 'skset': { const s2 = DB.songs[UI.overlay.id]; const cur = (keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)(m?)$/); const minor = UI.overlay.minor !== undefined ? UI.overlay.minor : (cur ? !!cur[2] : true); s2.key = el.dataset.v + (minor ? 'm' : ''); s2.keyAsWritten = s2.keyAsWritten || ''; saveDB(); render(); toast('Key saved: ' + s2.key); break; }
+      case 'rowkey': if (UI.zoom) break; UI.overlay = { type: 'songkey', id, near: false, from: 'row' }; render(); break;
+      case 'sktwo': UI.overlay.two = !UI.overlay.two; render(); break;
+      case 'skfry': { const s2 = DB.songs[UI.overlay.id]; const k0 = keyParts(s2.key)[0]; if (k0 && !/m$/.test(k0)) { s2.key = k0 + '/' + ROOTS[(ROOTS.indexOf(k0) + 5) % 12] + 'm'; saveDB(); render(); toast('Freygish: ' + s2.key); } break; }
+      case 'skmode': { const md = el.dataset.v; UI.overlay.mode = md; const s2 = DB.songs[UI.overlay.id]; const f2 = freygish(s2.key);
+        const r2 = f2 ? f2.a : ((keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)/) || [])[1];
+        if (r2 && keyParts(s2.key).length <= (f2 ? 2 : 1)) { s2.key = md === 'fre' ? r2 + '/' + ROOTS[(ROOTS.indexOf(r2) + 5) % 12] + 'm' : r2 + (md === 'min' ? 'm' : ''); saveDB(); }
+        render(); break; }
+      case 'skset': { const s2 = DB.songs[UI.overlay.id]; const cur = (keyParts(s2.key)[0] || '').match(/^([A-G][#b]?)(m?)$/); const md = UI.overlay.mode || (freygish(s2.key) ? 'fre' : (cur && !cur[2] ? 'maj' : 'min')); const r = el.dataset.v;
+        const nk = md === 'fre' ? r + '/' + ROOTS[(ROOTS.indexOf(r) + 5) % 12] + 'm' : r + (md === 'min' ? 'm' : ''); s2.key = UI.overlay.two && cur ? keyParts(s2.key)[0] + '/' + nk : nk; UI.overlay.two = false; s2.keyAsWritten = s2.keyAsWritten || ''; saveDB(); render(); toast('Key saved: ' + (freygish(s2.key) ? freygish(s2.key).a + ' freygish' : s2.key)); break; }
       case 'skclear': { const s2 = DB.songs[UI.overlay.id]; s2.key = ''; saveDB(); render(); break; }
       case 'sknear': UI.overlay.near = !UI.overlay.near; render(); break;
-      case 'skboard': { const s2 = DB.songs[UI.overlay.id]; const loc2 = locate(s2.id); UI.keyFilter = keyParts(s2.key)[0]; UI.near = !!UI.overlay.near; UI.overlay = null; stack.length = 0; UI.view = 'board'; if (loc2) { UI.idx = loc2.li; UI.sec[loc2.li] = null; } render(); break; }
+      case 'skboard': { const s2 = DB.songs[UI.overlay.id]; const loc2 = locate(s2.id); UI.keyFilter = freygish(s2.key) ? freygish(s2.key).a + 'fre' : keyParts(s2.key)[0]; UI.near = !!UI.overlay.near; UI.overlay = null; stack.length = 0; UI.view = 'board'; if (loc2) { UI.idx = loc2.li; UI.sec[loc2.li] = null; } render(); break; }
       case 'peekgo': if (!id) break; UI.overlay = { type: 'peek', id }; render(); break;
       case 'back': back(); break;
       case 'nav': if (!id) break; UI.songId = id; render(); break;
@@ -964,7 +1129,11 @@
       case 'colsec': if (UI.zoom) break; UI.overlay = { type: 'sec', li: +el.dataset.li }; render(); break;
       case 'listmenu': if (UI.zoom) { setZoom(false); break; } UI.overlay = { type: 'lists' }; render(); break;
       case 'golist': UI.idx = +el.dataset.li; UI.overlay = null; UI.zoom = false; render(); break;
+      case 'knowntog': { const sg = DB.songs[id]; sg.known = !sg.known; saveDB();
+        if (UI.view === 'board') { if (SET.knownOnly || UI.sec[UI.idx] === '__known') refreshBoardBody(); else refreshRows(id); refreshHeader(); } else render();
+        toast(sg.known ? '✓ Marked: I know it' : 'Unmarked'); break; }
       case 'knownonly': SET.knownOnly = !SET.knownOnly; saveSet(); render(); toast(SET.knownOnly ? 'Showing only songs you know ✓' : 'Showing all songs'); break;
+      case 'lib': switchLib(el.dataset.v); break;
       case 'hidectl': SET.hideControls = !SET.hideControls; saveSet(); render(); break;
       case 'totop': { const c = $(`.col[data-li="${UI.idx}"]`); if (c) c.scrollTo({ top: 0, behavior: 'smooth' }); UI.scroll[UI.idx] = 0; break; }
       case 'tonight': go('tonight'); break;
@@ -1010,7 +1179,7 @@
       case 'rmTrack': readForm(); UI.edit.trackFile = null; UI.edit.trackRemove = true; render(); break;
       case 'delsong': {
         if (!UI.edit.delArm) { readForm(); UI.edit.delArm = true; render(); break; }
-        const sid = UI.edit.song.id; const loc = locate(sid); if (loc) DB.lists[loc.li].sections[loc.si].ids.splice(loc.i, 1);
+        const sid = UI.edit.song.id; DB.lists.forEach(L => L.sections.forEach(S => { S.ids = S.ids.filter(i => i !== sid); }));
         trackDel(sid); delete DB.songs[sid]; DB.events.forEach(x => x.ids = x.ids.filter(i => i !== sid)); DB.favs = DB.favs.filter(i => i !== sid); saveDB();
         stack.length = 0; UI.view = 'board'; render(); toast('Song deleted'); break; }
       // search
@@ -1024,6 +1193,14 @@
         const fs = UI.overlay.forSong; if (fs && !n.ids.includes(fs)) n.ids.push(fs);
         DB.events.push(n); DB.currentEvent = n.id; saveDB(); UI.overlay = null; render(); toast('★ now adds to ' + n.title); break; }
       case 'addto': UI.overlay = { type: 'addto', id }; render(); break;
+      case 'places': UI.overlay = { type: 'places', id }; render(); break;
+      case 'toggleplace': { const sid = UI.overlay.id; const S = DB.lists[+el.dataset.li].sections[+el.dataset.si]; const i = S.ids.indexOf(sid);
+        if (i >= 0) S.ids.splice(i, 1); else S.ids.push(sid); saveDB(); render(); break; }
+      case 'goplace': UI.ctx = { type: 'section', li: +el.dataset.li, si: +el.dataset.si }; render(); break;
+      case 'dbtab': UI.dbv.tab = el.dataset.v; render(); break;
+      case 'opendb': UI.overlay = null; go('db'); break;
+      case 'dbopen': go('song', { songId: id, ctx: { type: 'db' } }); break;
+      case 'pastgigs': UI.overlay.showPast = !UI.overlay.showPast; render(); break;
       case 'toggleto': { const e2 = DB.events.find(x => x.id === el.dataset.v); const sid = UI.overlay.id; const i = e2.ids.indexOf(sid); if (i >= 0) e2.ids.splice(i, 1); else e2.ids.push(sid); saveDB(); render(); break; }
       case 'pickev': DB.currentEvent = el.dataset.v; saveDB(); UI.overlay = null; render(); toast('★ now adds to ' + ev().title); break;
       case 'newev': { const copy = el.dataset.v === 'copy'; const n = { id: 'e' + Date.now(), title: 'New event', date: today(), calendar: '', playlist: '', ids: copy ? ev().ids.slice() : [] }; DB.events.push(n); DB.currentEvent = n.id; saveDB(); UI.overlay = { type: 'evdetails' }; render(); break; }
@@ -1041,26 +1218,41 @@
       case 'gigprev': UI.gigI = Math.max(0, UI.gigI - 1); render(); break;
       case 'endgig': keepAwake(false); back(); break;
       // settings
-      case 'backup': download('song-library-backup-' + today() + '.json', JSON.stringify(DB), 'application/json'); SET.lastBackup = Date.now(); saveSet(); setTimeout(render, 300); break;
+      case 'backup': { const all = { format: 'song-library-backup', v: 2, libraries: {} }; const ks = Object.keys(LIBS);
+        Promise.all(ks.map(k => k === SET.lib ? DB : libGet(k))).then(ds => { ds.forEach((d, i) => { if (d) all.libraries[ks[i]] = d; }); download('song-library-backup-' + today() + '.json', JSON.stringify(all), 'application/json'); SET.lastBackup = Date.now(); saveSet(); setTimeout(render, 300); }); } break;
       case 'restore': $('#restorefile').click(); break;
+      case 'importsongs': $('#importfile').click(); break;
       case 'csv': download('song-library-' + today() + '.csv', csv(), 'text/csv'); break;
       case 'look': SET.look = el.dataset.v; saveSet(); render(); break;
       case 'lsize': SET.lyricSize = +el.dataset.v; saveSet(); render(); break;
-      case 'reset': if (!UI.resetArm) { UI.resetArm = true; render(); break; } UI.resetArm = false; localStorage.removeItem(DB_KEY); boot(); break;
+      case 'reset': if (!UI.resetArm) { UI.resetArm = true; render(); break; } UI.resetArm = false; libDel(SET.lib).then(boot); break;
     }
   });
   document.addEventListener('change', e => {
     const a = e.target.dataset.act;
-    if (a === 'elist') { readForm(); UI.edit.li = +e.target.value; UI.edit.si = 0; UI.edit.after = DB.lists[UI.edit.li].sections[0].ids.length - 1; render(); }
+    if (a === 'elist') { readForm(); UI.edit.li = +e.target.value; UI.edit.si = 0; UI.edit.after = UI.edit.li < 0 ? -1 : DB.lists[UI.edit.li].sections[0].ids.length - 1; render(); }
     if (a === 'esec') { readForm(); UI.edit.si = +e.target.value; UI.edit.after = DB.lists[UI.edit.li].sections[UI.edit.si].ids.filter(i => i !== UI.edit.song.id).length - 1; render(); }
   });
   document.addEventListener('keydown', e => { if (e.key === 'Escape' && UI.overlay) { UI.overlay = null; render(); } });
   window.addEventListener('resize', () => { const b = $('#board'); if (b && !UI.zoom) { b.scrollLeft = UI.idx * colW(b); refreshHeader(); } layoutGP(); });
 
   // ---------- boot ----------
+  function emptyLib() { return { v: 1, lists: [{ name: 'My songs', sections: [{ name: '', ids: [] }] }], songs: {}, events: [{ id: 'e1', title: 'My event', date: '', calendar: '', playlist: '', ids: [] }], currentEvent: 'e1', favs: [], nextId: 1 }; }
+  let OTHER = null;  // the other library, read-only, for "also in" checks
+  function loadOther() { const o = SET.lib === 'joel' ? 'mine' : 'joel'; OTHER = null; return libGet(o).then(d => { if (d && d.songs) { OTHER = { lib: o, names: new Set(Object.values(d.songs).map(x => norm(x.title).replace(/\s+/g, ' ').trim())) }; } }); }
+  function alsoInOther(s) { return OTHER && OTHER.names.has(norm(s.title).replace(/\s+/g, ' ').trim()) ? LIBS[OTHER.lib].name : ''; }
+  function switchLib(lib) { if (lib === SET.lib) return; closePlayer(); SET.lib = lib; saveSet(); Object.assign(UI, { idx: 0, sec: {}, zoom: false, keyFilter: null, scroll: {}, overlay: null }); boot(); toast('Now showing ' + LIBS[lib].name); }
   async function boot() {
-    const saved = safeJSON(localStorage.getItem(DB_KEY));
-    if (saved && saved.songs) DB = saved;
+    if (!LIBS[SET.lib]) SET.lib = 'joel';
+    const saved = await libGet(SET.lib);
+    const emptyMine = SET.lib === 'mine' && saved && saved.songs && !Object.keys(saved.songs).length;
+    if (saved && saved.songs && !emptyMine) DB = saved;
+    else if (SET.lib === 'mine') {
+      DB = emptyLib();
+      // a prepared starter for My library, if one ships with the app (my-library.json)
+      try { const m = window.MY_LIBRARY_SEED || await (async () => { const r = await fetch('my-library.json'); return r.ok ? r.json() : null; })(); if (m) importSongs(m); } catch (e) {}
+      saveDB();
+    }
     else {
       let seed = window.SONG_LIBRARY_SEED;
       if (!seed) { try { seed = await (await fetch('song-library.json')).json(); } catch (e) { app().innerHTML = '<div class="empty">Could not load the song list.</div>'; return; } }
@@ -1069,10 +1261,13 @@
     const td = today(); const todays = DB.events.find(e => e.date === td);
     if (todays && SET.autoDay !== td && DB.currentEvent !== todays.id) { DB.currentEvent = todays.id; saveDB(); setTimeout(() => toast('Today: ' + todays.title + ' — ★ adds here'), 600); }
     SET.autoDay = td; saveSet();
+    repairJoel();
+    await loadOther();
     UI.view = 'board'; stack.length = 0; render();
     const q = new URLSearchParams(location.search); const shared = firstUrl((q.get('url') || '') + ' ' + (q.get('text') || '') + ' ' + (q.get('title') || ''));
     if (shared) { history.replaceState(null, '', location.pathname); startEdit(null); applyLink(shared); }
   }
   if ('serviceWorker' in navigator && location.protocol === 'https:' && !window.SONG_LIBRARY_SEED) navigator.serviceWorker.register('sw.js').catch(() => {});
+  window.__songlib = { db: () => DB, edit: fn => { fn(DB); saveDB(); render(); } };  // for automated tests
   boot();
 })();
