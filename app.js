@@ -242,9 +242,9 @@
       <button class="open" data-act="open" data-id="${s.id}">
         <span class="key rk${s.key ? '' : ' none'}" data-act="rowkey" data-id="${s.id}" role="button" aria-label="Change key">${keyHTML(s.key)}</span>
         ${s.meter ? `<span class="meter">${esc(s.meter)}</span>` : ''}
-        <span class="ttl">${s.track ? '<span class="known" style="color:var(--accent)">♪ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
+        ${s.lyrics ? '<span class="lyrmark" aria-hidden="true">≡</span>' : ''}<span class="ttl">${s.track ? '<span class="known" style="color:var(--accent)">♪ </span>' : ''}${esc(s.title)}${s.tune ? `<span class="tune">  · ${esc(s.tune)}</span>` : ''}</span>
       </button>
-      ${s.lyrics ? `<button class="heart" data-act="peek" data-id="${s.id}" aria-label="Preview lyrics" style="color:var(--muted)">${I.lines}</button>` : '<span style="width:22px;flex:none"></span>'}
+      ${s.lyrics ? `<button class="heart" data-act="peek" data-id="${s.id}" aria-label="Preview lyrics" style="color:var(--muted)">${I.lines}</button>` : '<span class="sp" style="width:22px;flex:none"></span>'}
     </div>`;
   }
   function colHTML(L, li) {
@@ -262,19 +262,21 @@
       const known = songs.filter(s => s.known).length;
       if (S.name || L.sections.length > 1) html += `<div class="sechead"><span class="n">${songs.length}${known ? ` · <b>${known} ✓</b>` : ''}</span><span class="nm" dir="auto">${esc(S.name || 'Songs')}</span></div>`;
       html += songs.map(s => rowHTML(s, li, si)).join('');
-      if (!songs.length) html += '<div class="empty">No songs yet</div>';
+      if (!songs.length && !L.custom) html += '<div class="empty">No songs yet</div>';
+      if (L.custom) html += `<button class="addsongs" data-act="addsongs" data-li="${li}" data-si="${si}">＋ Add songs${S.name ? ' to ' + esc(S.name) : ''}</button>`;
       shown += songs.length;
     });
-    if (!listTotal(L)) html += `<div class="empty">No songs here yet.<br>Tap + to add one, or <button class="link" data-act="settings">import songs</button>.</div>`;
+    if (L.custom) html += `<button class="addsongs sec" data-act="addsec" data-li="${li}">＋ New category</button>`;
+    else if (!listTotal(L)) html += `<div class="empty">No songs here yet.<br>Tap + to add one, or <button class="link" data-act="settings">import songs</button>.</div>`;
     else if (!shown && (f || UI.keyFilter || SET.knownOnly)) html += `<div class="empty">${f === '__fav' ? 'No favorites in this list yet — tap ♡ on a song.' : f === '__known' ? 'No songs marked ✓ known in this list yet — mark them in Edit.' : (SET.knownOnly ? 'No songs you know in this list yet — mark them ✓ in Edit.' : 'No songs match.')}</div>`;
     return `<div class="col${li === UI.idx ? ' cur' : ''}" data-li="${li}">${html}</div>`;
   }
   function headerHTML() {
     const L = DB.lists[UI.idx]; const f = UI.sec[UI.idx] || null;
-    if (SET.hideControls && !UI.zoom) { const fl = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All sections');
+    if (SET.hideControls && !UI.zoom) { const fl = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All songs');
       return `<div class="minihdr" id="hdr"><button class="link" style="text-decoration:none;font-size:15px;font-weight:800;flex:none;max-width:38%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" data-act="totop">${esc(L.name)}</button><button class="minisec" data-act="secmenu"><span dir="auto">${esc(fl)}</span>${I.down}</button><button class="btn small" data-act="hidectl">Show controls</button></div>`; }
     const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
-    const secLabel = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All sections');
+    const secLabel = f === '__fav' ? '♡ Favorites' : f === '__known' ? '✓ Songs I know' : (f || 'All songs');
     const secN = f === '__known' ? L.sections.reduce((a, S) => a + S.ids.filter(id => DB.songs[id] && DB.songs[id].known).length, 0) : f === '__fav' ? favN : (f ? (L.sections.find(S => S.name === f) || { ids: [] }).ids.length : listTotal(L));
     const kf = UI.keyFilter ? `Key: ${/fre$/.test(UI.keyFilter) ? UI.keyFilter.slice(0, -3) + ' fre' : UI.keyFilter}${UI.near && !/fre$/.test(UI.keyFilter) ? ' ±' : ''}` : 'Key';
     return `<div class="hdr" id="hdr">
@@ -288,11 +290,11 @@
       </div>
       <div class="dotsrow">
         <button class="left" data-act="hidectl">Hide controls</button>
-        ${DB.lists.map((x, i) => `<button class="dot${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}" aria-label="Go to ${esc(x.name)}"></button>`).join('')}
+        ${DB.lists.map((x, i) => `<button class="dot${i === UI.idx ? ' on' : ''}${x.custom ? ' mine' : ''}" data-act="golist" data-li="${i}" aria-label="Go to ${esc(x.name)}"></button>`).join('')}<button class="dotplus" data-act="newlist" aria-label="New list">+</button>
         <button class="right" data-act="settings" style="color:${SET.lastBackup ? 'var(--ok)' : 'var(--danger)'}">${SET.lastBackup ? I.check + 'Backed up' : 'Backup'}</button>
       </div>
       ${UI.zoom ? '<div style="min-height:36px;display:flex;align-items:center;justify-content:center;font-size:12px;font-weight:700;color:var(--muted)">Pinch out or tap a list to open it</div>' :
-      `<button class="secbtn" data-act="secmenu"><span style="display:flex;align-items:center;gap:6px">${I.down}<span style="font-size:12px;color:var(--muted)">${secN} songs</span></span><span style="display:flex;align-items:center;gap:6px"><span class="val" dir="auto">${esc(secLabel)}</span><span class="lbl">SECTION</span></span></button>`}
+      `<button class="secbtn" data-act="secmenu"><span style="display:flex;align-items:center;gap:6px">${I.down}<span style="font-size:12px;color:var(--muted)">${secN} songs</span></span><span style="display:flex;align-items:center;gap:6px"><span class="val" dir="auto">${esc(secLabel)}</span></span></button>`}
     </div>`;
   }
   function tonightBarHTML() {
@@ -358,7 +360,6 @@
           <button class="ibtn" data-act="addto" data-id="${s.id}" aria-label="Add to another event">${I.cal.replace('#1F5FBF', 'var(--ink)').replace(/14/g, '18')}</button>
           ${canPlay ? (GP.songId === s.id ? `<button class="btn" style="flex:1" data-act="gpexpand">${GP.mode === 'mini' ? 'Show player' : 'Playing…'}</button>` : (s.track && li.vid ? `<button class="btn" style="flex:1" data-act="listen" data-src="audio">${I.play('var(--ink)')}My track</button><button class="btn" style="flex:.8" data-act="listen" data-src="yt">YouTube</button>` : `<button class="btn" style="flex:1" data-act="listen">${I.play('var(--ink)')}${s.track ? 'My track' : 'Listen'}</button>`)) :
           `<a class="btn" style="flex:1" href="${esc(li.url || ytSearchUrl(s))}" target="_blank" rel="noopener">YouTube ↗</a>`}
-          <button class="ibtn" data-act="fav" data-id="${s.id}" data-re="1" aria-label="Favorite">${I.heart(fav)}</button>
         </div>
         ${li.kind === 'Spotify' ? `<a class="link" style="color:#1F5FBF" href="${esc(li.url)}" target="_blank" rel="noopener">Open in Spotify app ›</a>` : ''}
       </div>
@@ -884,6 +885,14 @@
     DB.fix1 = true; saveDB();
   }
 
+  function keyKind(k) { if (!k) return ''; if (freygish(k)) return 'fre'; const p = keyParts(k); return p.some(x => /m$/.test(x)) ? 'min' : (p.length ? 'maj' : ''); }
+  function pickCands(o) {
+    const src = DB.lists[o.src]; if (!src) return [];
+    const seen = new Set(); const out = [];
+    src.sections.forEach((S, i) => { if (o.ssec !== '' && String(i) !== String(o.ssec)) return; S.ids.forEach(id => { const s = DB.songs[id]; if (!s || seen.has(id)) return; seen.add(id);
+      if (o.mode !== 'all' && keyKind(s.key) !== o.mode) return; if (o.known && !s.known) return; out.push(s); }); });
+    return out;
+  }
   function places(id) { const out = []; DB.lists.forEach((L, li) => L.sections.forEach((S, si) => { if (S.ids.includes(id)) out.push({ li, si }); })); return out; }
   function placeName(p) { const L = DB.lists[p.li]; const S = L.sections[p.si]; return L.name + (S.name ? ' › ' + S.name : ''); }
 
@@ -893,13 +902,15 @@
     if (o.type === 'sec') {
       const sli = o.li != null ? o.li : UI.idx; const L = DB.lists[sli]; const f = UI.sec[sli] || null;
       const favN = L.sections.reduce((a, S) => a + S.ids.filter(id => DB.favs.includes(id)).length, 0);
-      const opts = [{ k: '', n: 'All sections', c: listTotal(L) }, { k: '__fav', n: '♡ Favorites', c: favN }, { k: '__known', n: '✓ Songs I know', c: L.sections.reduce((a, S) => a + S.ids.filter(id => DB.songs[id] && DB.songs[id].known).length, 0) }].concat(L.sections.map(S => ({ k: S.name, n: S.name || 'Songs', c: S.ids.length })));
-      return `<div class="scrim top" data-act="close"><div class="menu" style="max-width:520px"><div class="mh">SECTIONS · ${esc(L.name).toUpperCase()}</div>${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
+      const opts = [{ k: '', n: 'All songs', c: listTotal(L) }].concat(L.sections.map(S => ({ k: S.name, n: S.name || 'Songs', c: S.ids.length })));
+      return `<div class="scrim top" data-act="close"><div class="menu" style="max-width:520px"><div class="mh">${esc(L.name).toUpperCase()}</div>${opts.map(x => `<button class="opt${(x.k || null) === f ? ' on' : ''}" data-act="pick-sec" data-v="${esc(x.k)}"><small>${x.c}</small><span dir="auto">${esc(x.n)}</span></button>`).join('')}</div></div>`;
     }
     if (o.type === 'lists') {
       return `<div class="scrim top" data-act="close"><div class="menu"><div class="mh">LIBRARY</div>
         <div style="padding:4px 12px 10px"><div class="seg">${Object.keys(LIBS).map(k => `<button class="${SET.lib === k ? 'on' : ''}" data-act="lib" data-v="${k}">${esc(LIBS[k].name)}</button>`).join('')}</div></div>
-        <div class="mh">JUMP TO A LIST</div>${DB.lists.map((L, i) => `<button class="opt${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}"><span>${esc(L.name)}</span><small>${listTotal(L)}</small></button>`).join('')}
+        <div class="mh">JUMP TO A LIST</div>${DB.lists.map((L, i) => `<button class="opt${i === UI.idx ? ' on' : ''}" data-act="golist" data-li="${i}"><span>${esc(L.name)}${L.custom ? ' <small style="color:var(--accent);font-weight:700">· my list</small>' : ''}</span><small>${listTotal(L)}</small></button>`).join('')}
+        <button class="opt" data-act="newlist" style="color:var(--accent);font-weight:800">＋ New list</button>
+        <button class="opt" data-act="arrange"><span>Arrange lists</span><small>move · rename · delete</small></button>
         <button class="opt" data-act="opendb" style="border-top:1.5px solid var(--line2)"><span>Song database${Object.values(DB.songs).some(s => s.lang) ? ' & lyrics' : ''}</span><small>${Object.keys(DB.songs).length}</small></button></div></div>`;
     }
     if (o.type === 'keys') {
@@ -994,6 +1005,39 @@
         <button class="opt" data-act="newevsheet" style="color:var(--accent)">＋ New event</button>
         <button class="opt" data-act="close" style="justify-content:center">Done</button></div></div>`;
     }
+    if (o.type === 'newlist') {
+      return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1"><span class="grab"></span><b style="font-size:19px">${o.addTo != null ? 'New category in ' + esc(DB.lists[o.addTo].name) : 'New list'}</b>
+        ${o.addTo != null ? '' : `<label class="field"><span class="lbl">LIST NAME</span><input class="inp" id="nlname" dir="auto" value="${esc(o.name || '')}" placeholder="Name of list"></label>`}
+        <div class="field"><span class="lbl">${o.addTo != null ? 'CATEGORY NAME' : 'CATEGORIES — OPTIONAL, YOU CAN ADD MORE LATER'}</span>
+          ${(o.secs || []).length ? `<div style="display:flex;flex-wrap:wrap;gap:6px">${o.secs.map((x, i) => `<button class="chip" data-act="nlrm" data-i="${i}" dir="auto">${esc(x)} ✕</button>`).join('')}</div>` : ''}
+          <div style="display:flex;gap:6px"><input class="inp" id="nlsec" dir="auto" placeholder="Name of category" style="flex:1">${o.addTo != null ? '' : '<button class="btn" data-act="nlsec" style="min-height:44px">Add</button>'}</div></div>
+        <button class="btn dark" style="min-height:50px" data-act="nlcreate">${o.addTo != null ? 'Add category' : 'Create list'}</button></div></div>`;
+    }
+    if (o.type === 'pick') {
+      const T = DB.lists[o.li], TS = T.sections[o.si]; const src = DB.lists[o.src];
+      const srcOpts = DB.lists.map((L, i) => i === o.li ? '' : `<option value="${i}" ${i === o.src ? 'selected' : ''}>${esc(L.name)}</option>`).join('');
+      const secOpts = `<option value="">All categories</option>` + src.sections.map((S, i) => S.name ? `<option value="${i}" ${String(i) === String(o.ssec) ? 'selected' : ''}>${esc(S.name)}</option>` : '').join('');
+      const cand = pickCands(o);
+      const added = new Set(TS.ids);
+      return `<div class="scrim" data-act="close"><div class="sheet pick" data-stop="1"><span class="grab"></span>
+        <b style="font-size:17px" dir="auto">Add to “${esc(TS.name || T.name)}”</b>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px"><select class="inp" data-act="pksrc">${srcOpts}</select><select class="inp" data-act="pksec" dir="auto">${secOpts}</select></div>
+        <div class="seg">${[['all', 'All'], ['min', 'Minor'], ['maj', 'Major'], ['fre', 'Freygish']].map(m => `<button class="${o.mode === m[0] ? 'on' : ''}" data-act="pkmode" data-v="${m[0]}">${m[1]}</button>`).join('')}</div>
+        <button class="toggle" style="min-height:40px" data-act="pkknown"><span><b style="color:var(--ok)">✓ Only songs I know</b></span><span class="switch${o.known ? ' on' : ''}"><i></i></span></button>
+        <div class="pklist">${cand.slice(0, 400).map(s => { const has = added.has(s.id); return `<button class="pkrow${has ? ' has' : ''}${o.sel.includes(s.id) ? ' on' : ''}" data-act="pkcb" data-id="${s.id}"${has ? ' disabled' : ''}><span class="cb">${has ? '✓' : ''}</span><span class="key">${keyHTML(s.key)}</span><span class="t" dir="auto">${esc(s.title)}${s.tune ? ` <span class="muted" style="font-weight:400;font-size:12px">· ${esc(s.tune)}</span>` : ''}</span></button>`; }).join('') || '<div class="empty">No songs match</div>'}</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px"><button class="btn" data-act="pkall" style="min-height:48px">Add all ${cand.filter(s => !added.has(s.id)).length}</button><button class="btn dark" data-act="pkadd" id="pkaddbtn" style="min-height:48px">Add ${o.sel.length} selected</button></div>
+      </div></div>`;
+    }
+    if (o.type === 'arrange') {
+      return `<div class="scrim" data-act="close"><div class="sheet" data-stop="1"><span class="grab"></span>
+        <div style="display:flex;justify-content:space-between;align-items:center"><b style="font-size:19px">Arrange lists</b><button class="link" data-act="close" style="text-decoration:none;font-weight:800">Done</button></div>
+        <div style="max-height:60dvh;overflow-y:auto">${DB.lists.map((L, i) => o.edit === i ? `<div class="arow"><input class="inp" id="arname" dir="auto" value="${esc(L.name)}" style="flex:1"><button class="btn small" data-act="arsave" data-li="${i}">Save</button></div>` :
+          `<div class="arow"><span class="nm" dir="auto">${esc(L.name)}${L.custom ? ' <small style="color:var(--accent);font-weight:700">my list</small>' : ''}<small class="muted"> · ${listTotal(L)}</small></span>
+          <button class="ibtn sm" data-act="arup" data-li="${i}" aria-label="Move up"${i === 0 ? ' disabled' : ''}>↑</button><button class="ibtn sm" data-act="ardn" data-li="${i}" aria-label="Move down"${i === DB.lists.length - 1 ? ' disabled' : ''}>↓</button>
+          ${L.custom ? `<button class="ibtn sm" data-act="aredit" data-li="${i}" aria-label="Rename">✎</button><button class="ibtn sm${o.delArm === i ? ' danger' : ''}" data-act="ardel" data-li="${i}" aria-label="Delete">${o.delArm === i ? 'Sure?' : '🗑'}</button>` : ''}</div>`).join('')}</div>
+        ${o.delArm != null ? '<span class="muted" style="font-size:12px">Deleting a list only removes it from the Board — the songs stay in their other lists.</span>' : ''}
+      </div></div>`;
+    }
     if (o.type === 'places') {
       const sg = DB.songs[o.id];
       return `<div class="scrim" data-act="close" style="justify-content:center;padding:16px"><div class="menu" data-stop="1" style="margin:0;max-width:520px">
@@ -1012,6 +1056,21 @@
     return '';
   }
 
+  // ---------- slide a finger along the dots to flip through the lists ----------
+  let SCRUB = null;
+  function scrubTo(li) {
+    const b = $('#board'); if (!b || li === UI.idx) return;
+    UI.idx = li; b.scrollLeft = li * colW(b);
+    $$('.dotsrow .dot').forEach(d => d.classList.toggle('on', +d.dataset.li === li));
+    $$('.col', b).forEach(c => c.classList.toggle('cur', +c.dataset.li === li));
+    const t = $('#hdr .t'); if (t && !UI.zoom && visCols() === 1) t.textContent = DB.lists[li].name;
+    if (navigator.vibrate) try { navigator.vibrate(6); } catch (e) {}
+  }
+  function nearestDot(x) { let best = null, bd = 1e9; $$('.dotsrow .dot').forEach(d => { const r = d.getBoundingClientRect(); const dd = Math.abs(r.left + r.width / 2 - x); if (dd < bd) { bd = dd; best = d; } }); return best; }
+  document.addEventListener('touchstart', e => { const d = e.target.closest && e.target.closest('.dotsrow .dot'); if (!d) return; SCRUB = { moved: false }; }, { passive: true });
+  document.addEventListener('touchmove', e => { if (!SCRUB) return; e.preventDefault(); SCRUB.moved = true; const d = nearestDot(e.touches[0].clientX); if (d) scrubTo(+d.dataset.li); }, { passive: false });
+  document.addEventListener('touchend', () => { if (!SCRUB) return; const m = SCRUB.moved; SCRUB = null; if (m) render(); }, { passive: true });
+
   // ---------- after render: bind non-click events ----------
   function after() {
     const b = $('#board');
@@ -1022,6 +1081,7 @@
       b.addEventListener('scroll', () => {
         if (UI.zoom) return;
         clearTimeout(t); t = setTimeout(() => {
+          if (SCRUB) return;
           const i = Math.round(b.scrollLeft / colW(b));
           if (i !== UI.idx && i >= 0 && i < DB.lists.length) { UI.idx = i; refreshHeader(); $$('.col', b).forEach(c => c.classList.toggle('cur', +c.dataset.li === i)); updateTop(); }
         }, 60);
@@ -1194,6 +1254,30 @@
         DB.events.push(n); DB.currentEvent = n.id; saveDB(); UI.overlay = null; render(); toast('★ now adds to ' + n.title); break; }
       case 'addto': UI.overlay = { type: 'addto', id }; render(); break;
       case 'places': UI.overlay = { type: 'places', id }; render(); break;
+      case 'newlist': UI.overlay = { type: 'newlist', secs: [] }; render(); setTimeout(() => { const x = $('#nlname'); if (x) x.focus(); }, 50); break;
+      case 'addsec': UI.overlay = { type: 'newlist', addTo: +el.dataset.li, secs: [] }; render(); setTimeout(() => { const x = $('#nlsec'); if (x) x.focus(); }, 50); break;
+      case 'nlsec': { const o = UI.overlay; const n = $('#nlname'); if (n) o.name = n.value; const v = ($('#nlsec').value || '').trim(); if (v && !o.secs.includes(v)) o.secs.push(v); render(); setTimeout(() => { const x = $('#nlsec'); if (x) x.focus(); }, 30); break; }
+      case 'nlrm': { const o = UI.overlay; const n = $('#nlname'); if (n) o.name = n.value; o.secs.splice(+el.dataset.i, 1); render(); break; }
+      case 'nlcreate': { const o = UI.overlay; const last = ($('#nlsec').value || '').trim(); const secs = o.secs.slice(); if (last && !secs.includes(last)) secs.push(last);
+        if (o.addTo != null) { if (!secs.length) { $('#nlsec').focus(); break; } const L = DB.lists[o.addTo]; secs.forEach(n => { if (!L.sections.some(S => S.name === n)) L.sections.push({ name: n, ids: [] }); });
+          L.sections = L.sections.filter(S => S.name || S.ids.length); saveDB(); UI.overlay = null; render(); toast('Category added'); break; }
+        const name = ($('#nlname').value || '').trim(); if (!name) { $('#nlname').focus(); toast('Give the list a name'); break; }
+        DB.lists.push({ name, custom: true, sections: secs.length ? secs.map(n => ({ name: n, ids: [] })) : [{ name: '', ids: [] }] });
+        saveDB(); UI.overlay = null; UI.zoom = false; UI.idx = DB.lists.length - 1; render(); toast('List created — tap ＋ Add songs'); break; }
+      case 'addsongs': { const li = +el.dataset.li, si = +el.dataset.si; const src = li === 0 ? 1 : 0; UI.overlay = { type: 'pick', li, si, src: DB.lists.length > 1 ? src : li, ssec: '', mode: 'all', known: false, sel: [] }; render(); break; }
+      case 'pkmode': UI.overlay.mode = el.dataset.v; UI.overlay.sel = []; render(); break;
+      case 'pkknown': UI.overlay.known = !UI.overlay.known; UI.overlay.sel = []; render(); break;
+      case 'pkcb': { const o = UI.overlay; const i = o.sel.indexOf(id); if (i >= 0) o.sel.splice(i, 1); else o.sel.push(id); el.classList.toggle('on', i < 0); const b = $('#pkaddbtn'); if (b) b.textContent = 'Add ' + o.sel.length + ' selected'; break; }
+      case 'pkall': case 'pkadd': { const o = UI.overlay; const S = DB.lists[o.li].sections[o.si]; const ids = a === 'pkall' ? pickCands(o).map(s => s.id) : o.sel;
+        let n = 0; ids.forEach(x => { if (!S.ids.includes(x)) { S.ids.push(x); n++; } }); if (!n) { toast(a === 'pkadd' ? 'Tick some songs first' : 'Nothing new to add'); break; }
+        saveDB(); o.sel = []; render(); toast(`Added ${n} song${n === 1 ? '' : 's'} — pick more or close`); break; }
+      case 'arrange': UI.overlay = { type: 'arrange' }; render(); break;
+      case 'arup': case 'ardn': { const i = +el.dataset.li, j = a === 'arup' ? i - 1 : i + 1; if (j < 0 || j >= DB.lists.length) break; const cur = DB.lists[UI.idx];
+        [DB.lists[i], DB.lists[j]] = [DB.lists[j], DB.lists[i]]; UI.idx = DB.lists.indexOf(cur); UI.sec = {}; UI.scroll = {}; UI.overlay.delArm = null; saveDB(); render(); break; }
+      case 'aredit': UI.overlay.edit = +el.dataset.li; render(); setTimeout(() => { const x = $('#arname'); if (x) x.focus(); }, 30); break;
+      case 'arsave': { const v = ($('#arname').value || '').trim(); if (v) DB.lists[+el.dataset.li].name = v; UI.overlay.edit = null; saveDB(); render(); break; }
+      case 'ardel': { const i = +el.dataset.li; if (UI.overlay.delArm !== i) { UI.overlay.delArm = i; render(); break; } const cur = DB.lists[UI.idx]; DB.lists.splice(i, 1);
+        UI.idx = Math.max(0, DB.lists.indexOf(cur)); UI.sec = {}; UI.scroll = {}; UI.overlay.delArm = null; saveDB(); render(); toast('List deleted'); break; }
       case 'toggleplace': { const sid = UI.overlay.id; const S = DB.lists[+el.dataset.li].sections[+el.dataset.si]; const i = S.ids.indexOf(sid);
         if (i >= 0) S.ids.splice(i, 1); else S.ids.push(sid); saveDB(); render(); break; }
       case 'goplace': UI.ctx = { type: 'section', li: +el.dataset.li, si: +el.dataset.si }; render(); break;
@@ -1230,6 +1314,8 @@
   });
   document.addEventListener('change', e => {
     const a = e.target.dataset.act;
+    if (a === 'pksrc') { UI.overlay.src = +e.target.value; UI.overlay.ssec = ''; UI.overlay.sel = []; render(); return; }
+    if (a === 'pksec') { UI.overlay.ssec = e.target.value; UI.overlay.sel = []; render(); return; }
     if (a === 'elist') { readForm(); UI.edit.li = +e.target.value; UI.edit.si = 0; UI.edit.after = UI.edit.li < 0 ? -1 : DB.lists[UI.edit.li].sections[0].ids.length - 1; render(); }
     if (a === 'esec') { readForm(); UI.edit.si = +e.target.value; UI.edit.after = DB.lists[UI.edit.li].sections[UI.edit.si].ids.filter(i => i !== UI.edit.song.id).length - 1; render(); }
   });

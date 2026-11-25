@@ -342,3 +342,33 @@ textarea.inp{unicode-bidi:plaintext}
 /* tap the key on a row to change it */
 .row .key.rk{cursor:pointer;min-height:24px}
 .fre{font-size:.72em;font-weight:700;margin-left:1px;letter-spacing:0;opacity:.85;text-transform:lowercase}
+
+/* custom lists */
+.dotsrow .dotplus{width:18px;height:18px;border-radius:50%;border:1.5px solid var(--accent);color:var(--accent);background:transparent;font-size:14px;font-weight:800;line-height:1;padding:0;display:inline-flex;align-items:center;justify-content:center;flex:none;margin-left:2px;cursor:pointer}
+.dotsrow .dot.mine{background:var(--accent);opacity:.55}
+.dotsrow .dot.mine.on{opacity:1}
+.addsongs{display:block;width:100%;text-align:right;border:none;background:none;color:var(--accent);font:inherit;font-size:14px;font-weight:700;padding:9px 2px;cursor:pointer;border-bottom:1px dashed var(--line2)}
+.addsongs.sec{text-align:center;border:1.5px dashed var(--line2);border-radius:8px;margin:12px 0 20px;color:var(--muted)}
+.sheet.pick{max-height:92dvh}
+.pklist{max-height:44dvh;overflow-y:auto;border-top:1px solid var(--line2);border-bottom:1px solid var(--line2)}
+.pkrow{display:flex;align-items:center;gap:8px;width:100%;min-height:40px;border:none;border-bottom:1px solid var(--line);background:none;padding:4px 2px;font:inherit;color:var(--ink);cursor:pointer;text-align:right}
+.pkrow .t{flex:1;min-width:0;font-weight:700;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.pkrow .cb{width:20px;height:20px;border:1.5px solid var(--line2);border-radius:5px;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--muted)}
+.pkrow.on .cb{background:var(--ok);border-color:var(--ok)}
+.pkrow.on .cb::after{content:'✓';color:#fff;font-weight:800}
+.pkrow.has{opacity:.5}
+.arow{display:flex;align-items:center;gap:6px;min-height:50px;border-bottom:1px solid var(--line)}
+.arow .nm{flex:1;min-width:0;font-weight:700;font-size:15px}
+.ibtn.sm{width:36px;height:36px;min-width:36px;font-size:16px}
+.ibtn.sm[disabled]{opacity:.3}
+.ibtn.sm.danger{width:auto;padding:0 8px;background:var(--danger);border-color:var(--danger);color:#fff;font-size:12px;font-weight:800}
+
+/* zoomed-out board: no empty lyrics gap on the right, small lyrics mark on the left, headers stay on top */
+.lyrmark{display:none}
+.board.zoomed .row .sp{display:none}
+.board.zoomed .lyrmark{display:inline-block;flex:none;font-size:11px;font-weight:800;color:var(--muted);line-height:1}
+.board.zoomed .colhead{position:sticky;top:0;z-index:3;margin:0 0 4px;white-space:nowrap;box-shadow:0 -8px 0 8px var(--bg)}
+.board.zoomed .colhead > span:first-child{overflow:hidden}
+.board.zoomed .colhead > span:first-child > span{overflow:hidden;text-overflow:ellipsis}
+.board.zoomed .col{padding-top:8px}
+.board.zoomed .sechead{position:sticky;top:33px;z-index:2;background:var(--bg)}
